@@ -1,0 +1,797 @@
+---
+title: "Full_Analysis_RF"
+author: "Ishaan Gadiyar"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading in Libraries
+
+```{r, message = FALSE, warnings = FALSE}
+library(tidyverse)
+library(vtable)
+library(knitr) 
+library(glmnet)
+library(locfit)
+library(table1)
+library(boot)
+library(ggplot2)
+library(GGally)
+library(ranger)
+library(tuneRanger)
+library(mlr)
+library(table1)
+
+# Setting the seed
+set.seed(123)
+```
+
+# Loading in RBC and Functional Data
+
+```{r}
+# Loading in data
+rbc <- read_csv("/media/disk2/RBC_version0.1/regional_GMV_all_sites_harmonized_covariates.csv")
+
+# Reading in the structural data
+func <- read_csv("/media/disk2/RBC_version0.1/FC_network17_harmonized_covariates.csv")
+
+# Setting each dataset to only include patients that overlap 
+rbc = rbc[rbc$participant_id %in% func$participant_id,]
+func = func[func$participant_id %in% rbc$participant_id,]
+
+# Sanity check
+sum(rbc$participant_id == func$participant_id) == nrow(func)
+
+# Merging datasets
+cols_to_add <- setdiff(names(func), names(rbc))
+both <- cbind(rbc, func[cols_to_add])
+
+# Loading in functions
+# Loading in functions
+source("/media/disk2/multivariateBWAS/code_for_review/build_funcs.R")
+# Sourcing influence and correlation functions
+source("/media/disk2/multivariateBWAS/code_for_review/influence_funcs.R")
+source("/media/disk2/multivariateBWAS/code_for_review/corr_funcs.R")
+
+# Loading in color palette
+cbbPalette <- c("#000000","#E69F00","#56B4E9","#009E73",
+                "#F0E442","#0072B2","#D55E00","#CC79A7")
+```
+
+# Creating Demographic Tables
+```{r}
+# Creating function for variables as expressed 
+r.cont = function(x, ...) {
+  c('',
+    `Median (IQR)` = sprintf("%s (%s, %s)", round(median(x, na.rm = T), 1), 
+                             round(quantile(x, 0.25, na.rm = T), 1), round(quantile(x, 0.75, na.rm = T), 1)))
+}
+
+
+# Assign readable row labels
+label(both$age) <- "Age (Years)"
+label(both$sex) <- "Sex"
+label(both$internalizing_mcelroy_harmonized_all_samples) <- "Internalizing Score"
+label(both$externalizing_mcelroy_harmonized_all_samples) <- "Externalizing Score"
+label(both$p_factor_mcelroy_harmonized_all_samples) <- "P-Factor"
+label(both$meanFD) <- "Mean Framewise Displacement"
+label(both$euler) <- "Euler Number"
+
+
+
+# Creating demographic table for all data
+tblRBC <- table1(~ age + sex + internalizing_mcelroy_harmonized_all_samples + externalizing_mcelroy_harmonized_all_samples + 
+         p_factor_mcelroy_harmonized_all_samples + meanFD + euler,
+       data= both,
+       caption="RBC Demographics") 
+
+tblRBC_df <- as.data.frame(tblRBC)
+write.csv(tblRBC_df, "RBC_Dems.csv", row.names = FALSE)
+
+# Changing sex to a binary for ML processes downstream - Male = 1; Female = 0
+both = both %>% mutate(sex = ifelse(sex == "Male", 1, 0))
+```
+
+# Machine Learning Functions
+
+## Bound Calculation and Output Functions 
+```{r}
+# Creating confidence interval function 
+getBounds <- function(data, est, conf, influ, type, outcome){
+  # Creating global variables
+  cl = conf
+  samp = nrow(data %>% drop_na(outcome))
+  
+  # Calculating OS estimator
+  if(type == "One-Step"){
+    # Calculating bounds
+    LB_est = sqrt(expit(logit(est^2) - qnorm(cl + (1 - cl) / 2)*sqrt(var(influ)/samp)))
+    UB_est = sqrt(expit(logit(est^2) - qnorm((1 - cl) / 2)*sqrt(var(influ)/samp)))
+  }
+  # Calculating Pearson
+  else if(type == "Pearson"){
+    # Calculating bounds
+    LB_est = tanh(atanh(est) - qnorm(cl + (1-cl)/2) * (1/sqrt(samp - 3)))
+    UB_est = tanh(atanh(est) - qnorm((1-cl)/2) * (1/sqrt(samp - 3)))
+  }
+  # Case if no type is recognized
+  else{
+    print("Applicable types of estimate not selected.")
+  }
+  return(c(LB_est, UB_est))
+}
+
+
+# Function to format results
+out_frame <- function(pears, OS, pear_bounds, OS_bounds, outcome, influ, label = "Base"){
+  data.frame(stat = c("Pearson", "One-Step"), 
+             label = c(label, label),
+             estimates = c(pears, OS),
+             lower_bounds = c(pear_bounds[1], OS_bounds[1]),
+             upper_bounds = c(pear_bounds[2], OS_bounds[2]),
+             Inf_Vec = I(list(influ, influ)), 
+             ScoreType = outcome)
+}
+```
+
+## Getting OS Differences and Ratios
+```{r}
+# Getting the bounds and OS difference for an outcome variable 
+# Outcome is the string name of the predicted variable
+get_OS_diff <- function(OS_base, OS_struct, OS_func, OS_both, influ_base, influ_struct, influ_func, influ_both, outcome){
+  # Calculating differences
+  diff_struct <- cor_os_diff(OS_struct, OS_base, influ_struct, influ_base)
+  diff_func <- cor_os_diff(OS_func, OS_base, influ_func, influ_base)
+  diff_both <- cor_os_diff(OS_both, OS_base, influ_both, influ_base)
+  
+  # Converting differences to data frame
+  diff_struct = data.frame(diff = diff_struct[1], lCI_diff = diff_struct[2], uCI_diff = diff_struct[3], outcome = outcome, Type = "Structural vs. Base")
+  diff_func = data.frame(diff = diff_func[1], lCI_diff = diff_func[2], uCI_diff = diff_func[3], outcome = outcome, Type = "Functional vs. Base")
+  diff_both = data.frame(diff = diff_both[1], lCI_diff = diff_both[2], uCI_diff = diff_both[3], outcome = outcome, Type = "Both vs. Base")
+  
+  # Combining all data together
+  diff_all <- rbind(diff_struct, diff_func, diff_both)
+  
+  # Truncating to bounds of 2 and -2
+  diff_all <- diff_all %>%
+    mutate(lCI_diff = ifelse(lCI_diff < -2, -2, lCI_diff)) %>%
+    mutate(uCI_diff = ifelse(uCI_diff > 2, 2, uCI_diff))
+  
+  # Getting rid of row names
+  rownames(diff_all) <- NULL
+  
+  # Returning difference data frame
+  return(diff_all)
+}
+
+
+# Getting the bounds and OS difference for an outcome variable 
+# Outcome is the string name of the predicted variable
+get_OS_ratio <- function(OS_base, OS_struct, OS_func, OS_both, influ_base, influ_struct, influ_func, influ_both, outcome){
+  # Calculating differences
+  ratio_struct <- cor_os_ratio(OS_struct, OS_base, influ_struct, influ_base)
+  ratio_func <- cor_os_ratio(OS_func, OS_base, influ_func, influ_base)
+  ratio_both <- cor_os_ratio(OS_both, OS_base, influ_both, influ_base)
+  
+  # Converting differences to data frame
+  ratio_struct = data.frame(ratio = ratio_struct[1], lCI_ratio = ratio_struct[2], uCI_ratio = ratio_struct[3], outcome = outcome, Type = "Structural vs. Base")
+  ratio_func = data.frame(ratio = ratio_func[1], lCI_ratio = ratio_func[2], uCI_ratio = ratio_func[3], outcome = outcome, Type = "Functional vs. Base")
+  ratio_both = data.frame(ratio = ratio_both[1], lCI_ratio = ratio_both[2], uCI_ratio = ratio_both[3], outcome = outcome, Type = "Both vs. Base")
+  
+  # Combining all data together
+  ratio_all <- rbind(ratio_struct, ratio_func, ratio_both)
+  
+  # Getting rid of row names
+  rownames(ratio_all) <- NULL
+  
+  # Returning difference data frame
+  return(ratio_all)
+}
+```
+
+## Analysis and Sample Splitting Methods
+```{r}
+# tuning function
+helper_ranger = function(trainDat, outcome, testDat, task){
+  # If the tuned model already gives non-constant preds, keep it.
+  if (sd(predict(task$model, newdata = data.frame(testDat))$data$response) > 1e-5) {
+    return(task$model)
+  }
+
+  # Otherwise walk the tried hyperparams (best MSE first) and re-train via mlr
+  tune_table <- task$results[order(task$results$mse), ]
+
+  for (i in seq_len(nrow(tune_table))) {
+    params <- tune_table[i, ]
+
+    # build an mlr learner with these params
+    lrn <- mlr::makeLearner(
+      "regr.ranger",
+      num.trees       = 250,
+      mtry            = params$mtry,
+      min.node.size   = params$min.node.size,
+      sample.fraction = params$sample.fraction,
+      num.threads     = 1,
+      respect.unordered.factors = "order"  # or as needed
+    )
+
+    # train an mlr model so predict() keeps the same API
+    tr_task <- mlr::makeRegrTask(id = "rf_task_retry", data = trainDat, target = outcome)
+    wm <- mlr::train(lrn, tr_task)
+
+    # check for non-constant predictions
+    if (sd(predict(wm, newdata = data.frame(testDat))$data$response) > 1e-5) {
+      return(wm)
+    }
+  }
+
+  # if everything fails, just return the original
+  return(task$model)
+}
+
+
+# Cross-Validation Function for RidgeRegression
+RF_CV <- function(data, folds, outcome, typeDat){
+  # Cleaning data
+  ## Data Processing - drop NA before CV
+  data_clean = data %>% drop_na(outcome) 
+  ## Assigning folds
+  data_clean$fold <- sample(rep(1:folds, length.out = nrow(data_clean)))
+  ## Checking for fold distribution 
+  table(data_clean$fold)
+  
+  
+  # Storage variables
+  OS_estimator = c()
+  pears_estimator = c()
+  influ_res_out = vector("list", length = folds)
+  
+  # Creating a for loop for 5-fold cross validation
+  for(i in 1:folds){
+    # Assigning data
+    test = data_clean %>% filter(fold == i)
+    train = data_clean %>% filter(fold != i)
+    
+    # Assigning x and y 
+    if(typeDat != "Baseline"){
+      if(outcome == "age"){
+        train = data.frame(train[, grepl(typeDat, colnames(train)) | colnames(train) %in% c(outcome, "sex", "euler", "meanFD")]) # can add euler here
+        x_test = data.frame(test[, grepl(typeDat, colnames(test)) | colnames(test) %in% c("sex", "euler", "meanFD")])
+      }
+      
+      else{
+        train = data.frame(train[, grepl(typeDat, colnames(train)) | colnames(train) %in% c(outcome, "age", "sex", "euler", "meanFD")])
+        x_test = data.frame(test[, grepl(typeDat, colnames(test)) | colnames(test) %in% c("age", "sex", "euler", "meanFD")])
+      }
+    }
+    else{
+      if(outcome == "age"){
+        train = data.frame(train[, colnames(train) %in% c("sex", "euler", "meanFD", outcome)])
+        x_test = data.frame(test[, colnames(test) %in% c("sex", "euler", "meanFD")])
+      }
+      
+      else{
+        train = data.frame(train[, colnames(train) %in% c("age", "sex", "euler", "meanFD", outcome)])
+        x_test = data.frame(test[, colnames(test) %in% c("age", "sex", "euler", "meanFD")])
+      }
+    }
+    
+    # Fitting a random forest model
+    task = makeRegrTask(id = "rf_task", data = train, target = outcome)
+    rfTune = tuneRanger(task, num.trees = 250, iters = 25, iters.warmup = 10, show.info = FALSE)
+    rfTune$model = helper_ranger(train, outcome, x_test, rfTune) # Calling for checking of tuning 
+    
+    # Getting predictions
+    test$preds = predict(rfTune$model, newdata = x_test)$data$response
+
+    # Formatting y and predictions for easier analysis
+    mu = as.vector(test$preds)
+    y_real = as.numeric(test[[outcome]])
+    
+    # Getting influence function vector on predicted y and y
+    inf_res = if_logit_sq(mu, y_real)
+    influ_res_out[[i]] <- inf_res
+    
+    # Plotting a matrix of y_real, predictions, and the influence function
+    # df <- data.frame(mu, y_real, inf_res)
+    # pairs(df, main = paste(outcome, typeDat, "Fold", i))
+    
+    # Getting pearson estimator 
+    pear_res = cor(mu, y_real)
+    pears_estimator = c(pears_estimator, pear_res)
+    
+    # Getting one-step estimator; predictions are passed into the function first
+    os_res = cor_os(mu, y_real)
+    OS_estimator = c(OS_estimator, os_res)
+  }
+  
+  # return(data.frame(OS_estimator, pears_estimator, lambda))
+  influ_res_out = data.frame(influence_results = I(influ_res_out))
+  return(data.frame(OS_estimator, pears_estimator, influ_res_out))
+}
+
+
+# Function for analysis without PCs
+getAnalysis_RF <- function(data, outcome, struct_string, func_string, folds, CI, label){
+  # Collecting for no data 
+  # Performing the cross-validation
+  base <- RF_CV(data, folds, outcome, "Baseline")
+  
+  # Take average of each estimator from cross-folds as final point estimate ("instant" cross-fitting)
+  OS_base = mean(base$OS_estimator)
+  pears_base = mean(base$pears_estimator)
+  
+  # Getting influence function output
+  influ_res_base = c()
+  for(i in 1:nrow(base)){
+    influ_res_base = c(influ_res_base, base[[i,"influence_results"]])
+  }
+  
+  # Getting bounds for One-Step
+  OS_bounds_base = getBounds(data, OS_base, CI, influ_res_base, "One-Step", outcome)
+  
+  # Getting bounds for Pearson
+  Pear_bounds_base = getBounds(data, pears_base, CI, influ_res_base, "Pearson", outcome)
+  
+  # Storing results in a data frame
+  base_results <- out_frame(pears_base, OS_base, Pear_bounds_base, OS_bounds_base, label, influ_res_base)
+  
+  
+  
+  # Collecting for structural data
+  # Performing the cross-validation
+  struct <- RF_CV(data, folds, outcome, struct_string)
+  
+  # Take average of each estimator from cross-folds as final point estimate ("instant" cross-fitting)
+  OS_struct = mean(struct$OS_estimator)
+  pears_struct = mean(struct$pears_estimator)
+  
+  # Getting influence function output
+  influ_res_struct = c()
+  for(i in 1:nrow(struct)){
+    influ_res_struct = c(influ_res_struct, struct[[i,"influence_results"]])
+  }
+  
+  # Getting bounds for One-Step
+  OS_bounds_struct = getBounds(data, OS_struct, CI, influ_res_struct, "One-Step", outcome)
+  
+  # Getting bounds for Pearson
+  Pear_bounds_struct = getBounds(data, pears_struct, CI, influ_res_struct, "Pearson", outcome)
+  
+  # Storing results in a data frame
+  struct_results <- out_frame(pears_struct, OS_struct, Pear_bounds_struct, OS_bounds_struct, label, influ_res_struct, "Structural Data")
+  
+  
+  
+  # Collecting for functional data
+  # Performing the cross-validation
+  func <- RF_CV(data, folds, outcome, func_string)
+  
+  # Take average of each estimator from cross-folds as final point estimate ("instant" cross-fitting)
+  OS_func = mean(func$OS_estimator)
+  pears_func = mean(func$pears_estimator)
+  
+  # Getting influence function output
+  influ_res_func = c()
+  for(i in 1:nrow(func)){
+    influ_res_func = c(influ_res_func, func[[i,"influence_results"]])
+  }
+  
+  # Getting bounds for One-Step
+  OS_bounds_func = getBounds(data, OS_func, CI, influ_res_func, "One-Step", outcome)
+  
+  # Getting bounds for Pearson
+  Pear_bounds_func = getBounds(data, pears_func, CI, influ_res_func, "Pearson", outcome)
+  
+  # Storing results in a data frame
+  func_results <- out_frame(pears_func, OS_func, Pear_bounds_func, OS_bounds_func, label, influ_res_func, "Functional Data")
+  
+  
+  
+  # Collecting for both structural and functional data
+  # Performing the cross-validation
+  both <- RF_CV(data, folds, outcome, paste0(struct_string,"|",func_string))
+  
+  # Take average of each estimator from cross-folds as final point estimate ("instant" cross-fitting)
+  OS_both = mean(both$OS_estimator)
+  pears_both = mean(both$pears_estimator)
+  
+  # Getting influence function output
+  influ_res_both = c()
+  for(i in 1:nrow(both)){
+    influ_res_both = c(influ_res_both, both[[i,"influence_results"]])
+  }
+  
+  # Getting bounds for One-Step
+  OS_bounds_both = getBounds(data, OS_both, CI, influ_res_both, "One-Step", outcome)
+  
+  # Getting bounds for Pearson
+  Pear_bounds_both = getBounds(data, pears_both, CI, influ_res_both, "Pearson", outcome)
+  
+  # Storing results in a data frame
+  both_results <- out_frame(pears_both, OS_both, Pear_bounds_both, OS_bounds_both, label, influ_res_both, "Both")
+  
+
+  # Combining all datasets together for age
+  results <- rbind(base_results, struct_results, func_results, both_results)
+  return(results)
+}
+
+
+# Sample Split training sample 
+getSampleSplit <- function(data, outcome, struct_string, func_string, folds, splits, CI, label){
+  # Setting column names and storage for analysis 
+  column_names <- c('stat', 'label', 'estimates', 'lower_bounds', 'upper_bounds', 'ScoreType', 'Split')
+  results <- data.frame(matrix(ncol = length(column_names), nrow = 0, dimnames = list(NULL, column_names)))
+  
+  # Setting column names and storage for one-step estimator differences/ratios
+  column_names_DR <- c('outcome', 'Type', 'ratio', 'lCI_ratio', 'uCI_ratio', 'diff', 'lCI_diff', 'uCI_diff')
+  results_DR <- data.frame(matrix(ncol = length(column_names_DR), nrow = 0, dimnames = list(NULL, column_names_DR)))
+  
+  # Running the analysis
+  while(splits > 0){ # Add split number here 
+    # Storing analysis splits
+    temp = getAnalysis_RF(data, outcome, struct_string, func_string, folds, CI, label)
+    temp$split = splits
+    results <- rbind(results, temp)
+    
+    # Storing difference and ratio per split 
+    diff <- get_OS_diff(temp$estimates[2], temp$estimates[4], temp$estimates[6], temp$estimates[8], temp$Inf_Vec[[2]], temp$Inf_Vec[[4]], temp$Inf_Vec[[6]], temp$Inf_Vec[[8]], outcome)
+    ratio <- get_OS_ratio(temp$estimates[2], temp$estimates[4], temp$estimates[6], temp$estimates[8], temp$Inf_Vec[[2]], temp$Inf_Vec[[4]], temp$Inf_Vec[[6]], temp$Inf_Vec[[8]], outcome)
+    temp_DR = merge(ratio, diff, by = c("outcome", "Type"))
+    temp_DR$split = splits
+    results_DR <- rbind(results_DR, temp_DR)
+
+    # Subtracting split by 1
+    splits = splits - 1
+  }
+  
+  return(list(results, results_DR))
+}
+```
+
+
+# Analyses with Functional, Structural, and Both Data with No PCs
+
+## Performing Analysis on Age
+
+```{r}
+# Running Analyis
+age_result = getSampleSplit(both, "age", "X17", "_to_", 5, 100, 0.95, "Age")
+
+# Taking medians of each statistic in Age analysis
+age_analysis_results = age_result[[1]] %>%
+  group_by(stat, label) %>%
+  summarise(
+    lower_bounds = median(lower_bounds, na.rm = TRUE),
+    upper_bounds = median(upper_bounds, na.rm = TRUE),
+    estimates = median(estimates, na.rm = TRUE)
+  )
+age_analysis_results$ScoreType = "Age"
+
+
+# Taking medians of each statistic in OS diff/ratio scores for age
+age_DR_results = age_result[[2]] %>%
+  group_by(Type) %>%
+  summarise(
+    ratio = median(ratio, na.rm = TRUE),
+    lCI_ratio = median(lCI_ratio, na.rm = TRUE),
+    uCI_ratio = median(uCI_ratio, na.rm = TRUE),
+    diff = median(diff, na.rm = TRUE),
+    lCI_diff = median(lCI_diff, na.rm = TRUE),
+    uCI_diff = median(uCI_diff, na.rm = TRUE)
+  )
+age_DR_results$ScoreType = "Age"
+```
+
+## Performing Analysis on P-Factor
+
+```{r}
+# Running analysis 
+pfac_result = getSampleSplit(both, "p_factor_mcelroy_harmonized_all_samples", "X17", "_to_", 5, 100, 0.95, "P-Factor")
+
+# Taking medians of each statistics
+pfac_analysis_results = pfac_result[[1]] %>%
+  group_by(stat, label) %>%
+  summarise(
+    lower_bounds = median(lower_bounds, na.rm = TRUE),
+    upper_bounds = median(upper_bounds, na.rm = TRUE),
+    estimates = median(estimates, na.rm = TRUE)
+  )
+pfac_analysis_results$ScoreType = "P-Factor"
+
+# Taking medians of each statistic in OS diff/ratio scores for age
+pfac_DR_results = pfac_result[[2]] %>%
+  group_by(Type) %>%
+  summarise(
+    ratio = median(ratio, na.rm = TRUE),
+    lCI_ratio = median(lCI_ratio, na.rm = TRUE),
+    uCI_ratio = median(uCI_ratio, na.rm = TRUE),
+    diff = median(diff, na.rm = TRUE),
+    lCI_diff = median(lCI_diff, na.rm = TRUE),
+    uCI_diff = median(uCI_diff, na.rm = TRUE)
+  )
+pfac_DR_results$ScoreType = "P-Factor"
+```
+
+## Performing Analysis on Internalizing
+
+```{r}
+# Running analysis 
+int_result = getSampleSplit(both, "internalizing_mcelroy_harmonized_all_samples", "X17", "_to_", 5, 100, 0.95, "Internalizing Score")
+
+# Taking medians of each statistics
+int_analysis_results = int_result[[1]] %>%
+  group_by(stat, label) %>%
+  summarise(
+    lower_bounds = median(lower_bounds, na.rm = TRUE),
+    upper_bounds = median(upper_bounds, na.rm = TRUE),
+    estimates = median(estimates, na.rm = TRUE)
+  )
+int_analysis_results$ScoreType = "Internalizing Score"
+
+# Taking medians of each statistic in OS diff/ratio scores for age
+int_DR_results = int_result[[2]] %>%
+  group_by(Type) %>%
+  summarise(
+    ratio = median(ratio, na.rm = TRUE),
+    lCI_ratio = median(lCI_ratio, na.rm = TRUE),
+    uCI_ratio = median(uCI_ratio, na.rm = TRUE),
+    diff = median(diff, na.rm = TRUE),
+    lCI_diff = median(lCI_diff, na.rm = TRUE),
+    uCI_diff = median(uCI_diff, na.rm = TRUE)
+  )
+int_DR_results$ScoreType = "Internalizing Score"
+```
+
+## Performing Analysis on Externalizing
+```{r}
+# Running analysis 
+ext_result = getSampleSplit(both, "externalizing_mcelroy_harmonized_all_samples", "X17", "_to_", 5, 100, 0.95, "Externalizing Score")
+
+# Taking medians of each statistics
+ext_analysis_results = ext_result[[1]] %>%
+  group_by(stat, label) %>%
+  summarise(
+    lower_bounds = median(lower_bounds, na.rm = TRUE),
+    upper_bounds = median(upper_bounds, na.rm = TRUE),
+    estimates = median(estimates, na.rm = TRUE)
+  )
+ext_analysis_results$ScoreType = "Externalizing Score"
+
+# Taking medians of each statistic in OS diff/ratio scores for age
+ext_DR_results = ext_result[[2]] %>%
+  group_by(Type) %>%
+  summarise(
+    ratio = median(ratio, na.rm = TRUE),
+    lCI_ratio = median(lCI_ratio, na.rm = TRUE),
+    uCI_ratio = median(uCI_ratio, na.rm = TRUE),
+    diff = median(diff, na.rm = TRUE),
+    lCI_diff = median(lCI_diff, na.rm = TRUE),
+    uCI_diff = median(uCI_diff, na.rm = TRUE)
+  )
+ext_DR_results$ScoreType = "Externalizing Score"
+```
+
+# Graphing Results
+
+## Graphing Correlation Results
+```{r}
+# Combining results for both outcomes
+results <- rbind(age_analysis_results, pfac_analysis_results, int_analysis_results, ext_analysis_results)
+
+# Reorder the x-axis ticks
+results$label <- factor(results$label,
+                        levels = c("Base", "Structural Data", "Functional Data", "Both"))
+
+# Reorder the legend (and plotting order) so Pearson comes first
+results$stat <- factor(results$stat,
+                       levels = c("Pearson", "One-Step"))
+
+# Setting order of boxes
+results$ScoreType <- factor(results$ScoreType,
+                            levels = c("Age", "P-Factor", "Externalizing Score", "Internalizing Score"))
+
+# Graphing Results
+corr_results <- ggplot(results, aes(x = label, y = estimates, color = stat)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = lower_bounds, ymax = upper_bounds),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  facet_wrap(~ ScoreType, nrow = 1) +  # or facet_grid(~ ScoreType)
+  labs(title = "Random Forest Analysis of Outcomes in RBC",
+       x = "Model Features",
+       y = "Correlation",
+       color = "Estimator") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") + 
+  scale_color_manual(values = c("One-Step" = "#56B4E9",
+                                "Pearson" = "#D55E00"))
+corr_results
+
+# Saving to square dimensions
+ggsave("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_100.png",
+       plot = corr_results,
+       width = 9,  # make wider
+       height = 4,  # adjust height
+       dpi = 300)
+
+# Saving ggplot object itself
+saveRDS(corr_results, file = "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_100.rds")
+```
+
+## Graphing One-Step Difference Results
+```{r}
+# Combining results for both outcomes
+results <- rbind(age_DR_results, pfac_DR_results, int_DR_results, ext_DR_results)
+
+# Reorder the x-axis ticks
+results$Type <- factor(results$Type,
+                        levels = c("Structural vs. Base", "Functional vs. Base", "Both vs. Base"))
+
+# Setting order of boxes
+results$ScoreType <- factor(results$ScoreType,
+                            levels = c("Age", "P-Factor", "Externalizing Score", "Internalizing Score"))
+
+# Graphing Results
+diff_results <- ggplot(results, aes(x = Type, y = diff)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = lCI_diff, ymax = uCI_diff),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  facet_wrap(~ ScoreType, nrow = 1) +  # or facet_grid(~ ScoreType)
+  labs(title = "Random Forest One-Step Differences in RBC",
+       x = "Comparisons",
+       y = "Difference") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") 
+diff_results
+
+# Saving to square dimensions
+ggsave("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_diff_100.png",
+       plot = diff_results,
+       width = 9,  # make wider
+       height = 4,  # adjust height
+       dpi = 300)
+
+# Saving ggplot object itself
+saveRDS(diff_results, file = "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_diff_100.rds")
+```
+
+## Graphing One-Step Ratio Results
+```{r}
+# Combining results for both outcomes
+results <- rbind(age_DR_results, pfac_DR_results, int_DR_results, ext_DR_results)
+
+# Reorder the x-axis ticks
+results$Type <- factor(results$Type,
+                        levels = c("Structural vs. Base", "Functional vs. Base", "Both vs. Base"))
+
+# Setting order of boxes
+results$ScoreType <- factor(results$ScoreType,
+                            levels = c("Age", "P-Factor", "Externalizing Score", "Internalizing Score"))
+
+# Graphing Results
+ratio_results <- ggplot(results, aes(x = Type, y = ratio)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = lCI_ratio, ymax = uCI_ratio),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  facet_wrap(~ ScoreType, nrow = 1) +  # or facet_grid(~ ScoreType)
+  labs(title = "Random Forest One-Step Ratios in RBC",
+       x = "Comparisons",
+       y = "Ratio") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") 
+ratio_results
+
+# Saving to square dimensions
+ggsave("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_ratio_100.png",
+       plot = ratio_results,
+       width = 9,  # make wider
+       height = 4,  # adjust height
+       dpi = 300)
+
+# Saving ggplot object itself
+saveRDS(ratio_results, file = "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_ratio_100.rds")
+```
+
+
+# Storing Extra Information
+
+## Creating a Table for Correlation Values Across Splits
+```{r}
+# Externalizing Score Table
+ext_kable = ext_result[[1]] %>%
+  arrange(stat, label, split) %>%   # sort by stat, then label, then split
+  select(stat, label, split, estimates, lower_bounds, upper_bounds) %>% 
+  kable(caption = "Externalizing Score Estimates and Confidence Bounds by Stat, Label, and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Internalizing Score Table
+int_kable = int_result[[1]] %>%
+  arrange(stat, label, split) %>%   # sort by stat, then label, then split
+  select(stat, label, split, estimates, lower_bounds, upper_bounds) %>% 
+  kable(caption = "Internalizing Score Estimates and Confidence Bounds by Stat, Label, and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Age Score Table
+age_kable = age_result[[1]] %>%
+  arrange(stat, label, split) %>%   # sort by stat, then label, then split
+  select(stat, label, split, estimates, lower_bounds, upper_bounds) %>% 
+  kable(caption = "Age Estimates and Confidence Bounds by Stat, Label, and Split (Random Forest)",
+        digits = 3, align = "c")
+
+
+# P-Factor Table
+pfac_kable = pfac_result[[1]] %>%
+  arrange(stat, label, split) %>%   # sort by stat, then label, then split
+  select(stat, label, split, estimates, lower_bounds, upper_bounds) %>% 
+  kable(caption = "P-Factor Score Estimates and Confidence Bounds by Stat, Label, and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Saving tables
+save_kable(ext_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Externalizing_Table_100.html")
+save_kable(int_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Internalizing_Table_100.html")
+save_kable(age_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Age_Table_100.html")
+save_kable(pfac_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_PFactor_Table_100.html")
+```
+
+## Creating a Table for OS Difference/Ratio Values Across Splits
+```{r}
+# Externalizing Score Table
+ext_kable = ext_result[[2]] %>%
+  arrange(Type, split) %>%   # sort by stat, then label, then split
+  select(outcome, Type, split, ratio, lCI_ratio, uCI_ratio, diff, lCI_diff, uCI_diff) %>% 
+  kable(caption = "OS Differences/Ratios and Confidence Bounds for Externalizing Score by Comparison and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Internalizing Score Table
+int_kable = int_result[[2]] %>%
+  arrange(Type, split) %>%   # sort by stat, then label, then split
+  select(outcome, Type, split, ratio, lCI_ratio, uCI_ratio, diff, lCI_diff, uCI_diff) %>% 
+  kable(caption = "OS Differences/Ratios and Confidence Bounds for Internalizing Score by Comparison and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Age Score Table
+age_kable = age_result[[2]] %>%
+  arrange(Type, split) %>%   # sort by stat, then label, then split
+  select(outcome, Type, split, ratio, lCI_ratio, uCI_ratio, diff, lCI_diff, uCI_diff) %>% 
+  kable(caption = "OS Differences/Ratios and Confidence Bounds for Age by Comparison and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# P-Factor Table
+pfac_kable = pfac_result[[2]] %>%
+  arrange(Type, split) %>%   # sort by stat, then label, then split
+  select(outcome, Type, split, ratio, lCI_ratio, uCI_ratio, diff, lCI_diff, uCI_diff) %>% 
+  kable(caption = "OS Differences/Ratios and Confidence Bounds for P-Factor by Comparison and Split (Random Forest)",
+        digits = 3, align = "c")
+
+# Saving tables
+save_kable(ext_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Externalizing_DR_Table_100.html")
+save_kable(int_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Internalizing_DR_Table_100.html")
+save_kable(age_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_Age_DR_Table_100.html")
+save_kable(pfac_kable, "/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_PFactor_DR_Table_100.html")
+```
+
+
+
+
+
+
+
+
