@@ -258,7 +258,7 @@ allResults_75_FC_7_ridge = truncate_cols(allResults_75_FC_7_ridge)
 
 allResults_10_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_10.csv")
 allResults_10_FC_17_ridge = truncate_cols(allResults_10_FC_17_ridge)
-allResults_25_FC_17 = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_25.csv")
+allResults_25_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_25.csv")
 allResults_25_FC_17_ridge = truncate_cols(allResults_25_FC_17_ridge)
 allResults_50_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_50.csv")
 allResults_50_FC_17_ridge = truncate_cols(allResults_50_FC_17_ridge)
