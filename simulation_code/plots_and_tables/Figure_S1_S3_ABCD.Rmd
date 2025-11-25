@@ -1,0 +1,90 @@
+---
+title: "ABCD Simulation Results"
+author: "Megan Jones"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+This code produces Figures S1 and S3.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+
+# Set up
+
+
+```{r,  fig.height=16, fig.width=22}
+# load libraries, data, and functions
+source("/media/disk2/multivariateBWAS/paper_code/simulation_code/RBC/sim_setup_roi_RBC.R")
+
+# comparing transformations from ABCD (external dataset we used before RBC)
+# these were saved without truncating columns or fixing standard error
+allResults_10_ABCD = read.csv("/media/disk2/multivariateBWAS/ABCD_sims/ROI_sims/results/harmonized/ridge_build/age/allResults_10.csv")
+allResults_25_ABCD = read.csv("/media/disk2/multivariateBWAS/ABCD_sims/ROI_sims/results/harmonized/ridge_build/age/allResults_25.csv")
+allResults_50_ABCD = read.csv("/media/disk2/multivariateBWAS/ABCD_sims/ROI_sims/results/harmonized/ridge_build/age/allResults_50.csv")
+allResults_75_ABCD = read.csv("/media/disk2/multivariateBWAS/ABCD_sims/ROI_sims/results/harmonized/ridge_build/age/allResults_75.csv")
+
+# fix qnorm - saved prior to fix on 6/2/25
+fix_quantile <- function(dt, types){
+  q95 <- qnorm(0.95) # what was mistakenly used
+  q975 <- qnorm(0.975) # what should be used
+  # fix the factor
+  qfac <- q975/q95
+  for(t in types){
+    # point estimate
+    pe <- dt[,paste0(t, "_inst")]
+    # old lower bound for calculating standard error
+    lb <-  dt[,paste0("lCI_", t, "_inst")]
+    # transformation
+    trans <- substr(t, 2, 2)
+    if(trans %in% c("f", "m")){
+      # untransformed
+      # new lower bound
+      dt[,paste0("lCI_", t, "_inst")] <- pe - qfac*(pe-lb)
+      dt[,paste0("uCI_", t, "_inst")] <- pe + qfac*(pe-lb)
+    }
+    if(trans %in% c("l")){
+      # logit
+      # new lower bound
+      dt[,paste0("lCI_", t, "_inst")] <- expit(logit(pe) - qfac*(logit(pe)-logit(lb)))
+      dt[,paste0("uCI_", t, "_inst")] <- expit(logit(pe) + qfac*(logit(pe)-logit(lb)))
+    }
+    if(trans %in% c("q")){
+      # sq logit
+      # new lower bound
+      dt[,paste0("lCI_", t, "_inst")] <- sqrt(expit(logit(pe^2) - qfac*(logit(pe^2)-logit(lb^2))))
+      dt[,paste0("uCI_", t, "_inst")] <- sqrt(expit(logit(pe^2) + qfac*(logit(pe^2)-logit(lb^2))))
+    }
+  }
+  
+  # truncate cols
+  dt <- truncate_cols(dt)
+  dt
+}
+
+# fix ABCD results
+allResults_10_ABCD <- fix_quantile(allResults_10_ABCD, types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+allResults_25_ABCD <- fix_quantile(allResults_25_ABCD, types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+allResults_50_ABCD <- fix_quantile(allResults_50_ABCD, types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+allResults_75_ABCD <- fix_quantile(allResults_75_ABCD, types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+
+# compare transformations (figure S1)
+plot_panel_trans(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+```
+
+```{r,  fig.height=8, fig.width=22}
+# compare instant and hold (figure S3)
+plot_panel_inst_hold(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+```
+
+
+

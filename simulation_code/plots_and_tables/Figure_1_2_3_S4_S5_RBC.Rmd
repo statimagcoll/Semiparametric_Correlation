@@ -1,0 +1,297 @@
+---
+title: "RBC Simulation Results"
+author: "Megan Jones"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+This code gives an example of how simulation results were compiled and produces Figures 1-3, S4, and S5.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+
+# Set up
+
+```{r, eval=T}
+# load libraries, data, and functions
+source("/media/disk2/multivariateBWAS/paper_code/simulation_code/RBC/sim_setup_roi_RBC.R")
+
+
+# set results path
+results_path = "/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/" # e.g., where the results were saved for Fig 2
+```
+
+# Compile simulation results
+
+```{r}
+# sample sizes and number of simulations
+ns = c(100, 200, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7500, 10000, 20000)
+nsim = 500
+
+# load in all results (rho_0 = 0.25, 0.5, 0.75)
+t_res_25 = list()
+for(n in ns){
+  for (sim in 1:nsim){
+    if(file.exists((paste0(results_path, "rho_25/n",n,"/simResults_",sim,".rds")))){
+      t_res_25[[paste0("n",n)]][[sim]] = readRDS(paste0(results_path, "rho_25/n",n,"/simResults_",sim,".rds"))
+  }
+  else{
+      t_res_25[[paste0("n",n)]][[sim]] = NULL
+    }
+}}
+
+t_res_50 = list()
+for(n in ns){
+  for (sim in 1:nsim){
+    if(file.exists((paste0(results_path, "rho_50/n",n,"/simResults_",sim,".rds")))){
+      t_res_50[[paste0("n",n)]][[sim]] = readRDS(paste0(results_path, "rho_50/n",n,"/simResults_",sim,".rds"))
+  }
+  else{
+      t_res_50[[paste0("n",n)]][[sim]] = NULL
+    }
+}}
+
+t_res_75 = list()
+for(n in ns){
+  for (sim in 1:nsim){
+    if(file.exists((paste0(results_path, "rho_75/n",n,"/simResults_",sim,".rds")))){
+      t_res_75[[paste0("n",n)]][[sim]] = readRDS(paste0(results_path, "rho_75/n",n,"/simResults_",sim,".rds"))
+  }
+  else{
+      t_res_75[[paste0("n",n)]][[sim]] = NULL
+    }
+  }}
+
+t_res_10 = list()
+for(n in ns){
+  for (sim in 1:nsim){
+    if(file.exists((paste0(results_path, "rho_10/n",n,"/simResults_",sim,".rds")))){
+      t_res_10[[paste0("n",n)]][[sim]] = readRDS(paste0(results_path, "rho_10/n",n,"/simResults_",sim,".rds"))
+  }
+  else{
+      t_res_10[[paste0("n",n)]][[sim]] = NULL
+    }
+  }}
+
+
+## parameter calculations
+# MPA / MAPA (when xi == mu)
+rho_true_25 = 0.25
+rho_true_50 = 0.50
+rho_true_75 = 0.75
+rho_true_10 = 0.10
+
+# TPA
+rho_2_25 = calc_rho_2(t_res_25, ns, "rho_2")
+rho_2_50 = calc_rho_2(t_res_50, ns, "rho_2")
+rho_2_75 = calc_rho_2(t_res_75, ns, "rho_2")
+rho_2_10 = calc_rho_2(t_res_10, ns, "rho_2")
+
+# Remove full data (extraneous, but saved if needed, e.g. to compute other transformations)
+for (name in names(t_res_25)) {
+  # Loop through each replicate
+  for (i in seq_along(t_res_25[[name]])) {
+    # Replace res with only the estimates element
+    t_res_25[[name]][[i]]$res <- t_res_25[[name]][[i]]$res$estimates
+  }
+}
+
+for (name in names(t_res_50)) {
+  # Loop through each replicate
+  for (i in seq_along(t_res_50[[name]])) {
+    # Replace res with only the estimates element
+    t_res_50[[name]][[i]]$res <- t_res_50[[name]][[i]]$res$estimates
+    t_res_50[[name]][[i]]$res_rho_2 <- t_res_50[[name]][[i]]$res_rho_2$estimates
+  }
+}
+
+for (name in names(t_res_10)) {
+  # Loop through each replicate
+  for (i in seq_along(t_res_10[[name]])) {
+    # Replace res with only the estimates element
+    t_res_10[[name]][[i]]$res <- t_res_10[[name]][[i]]$res$estimates
+    t_res_10[[name]][[i]]$res_rho_2 <- t_res_10[[name]][[i]]$res_rho_2$estimates
+  }
+}
+
+
+for (name in names(t_res_75)) {
+  # Loop through each replicate
+  for (i in seq_along(t_res_75[[name]])) {
+    # Replace res with only the estimates element
+    t_res_75[[name]][[i]]$res <- t_res_75[[name]][[i]]$res$estimates
+  }
+}
+
+
+# correlation estimator results
+allResults_25 = truncate_cols(get_if_res(t_res_25, ns, delete_lambda = T, nsim = nsim))
+allResults_rho_2_25 = get_if_res_rho_2(t_res_25, ns)
+write.csv(allResults_25, paste0(results_path, "allResults_25.csv"))
+
+allResults_50 = truncate_cols(get_if_res(t_res_50, ns, delete_lambda = T, nsim = nsim))
+allResults_rho_2_50 = get_if_res_rho_2(t_res_50, ns)
+write.csv(allResults_50, paste0(results_path, "allResults_50.csv"))
+
+allResults_75 = truncate_cols(get_if_res(t_res_75, ns, delete_lambda = T, nsim = nsim))
+allResults_rho_2_75 = get_if_res_rho_2(t_res_75, ns)
+write.csv(allResults_75, paste0(results_path, "allResults_75.csv"))
+
+allResults_10 = truncate_cols(get_if_res(t_res_10, ns, delete_lambda = T, nsim = nsim))
+allResults_rho_2_10 = get_if_res_rho_2(t_res_10, ns)
+write.csv(allResults_10, paste0(results_path, "allResults_10.csv"))
+```
+
+
+# Figure 1
+
+For rho_true = 0.5
+
+```{r}
+# MAPA
+rho_0_50 = readRDS("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rfxi_ridgemu/age/rho_50/rho_0.rds")[2]
+allResults_50 = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rfxi_ridgemu/age/allResults_50.csv")
+allResults_rho_2_50 = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rfxi_ridgemu/age/allResults_rho_2_50.csv")
+allResults_50 = truncate_cols(allResults_50)
+allResults_rho_2_50 = truncate_cols(allResults_rho_2_50)
+# TPA
+rho_2_50 = readRDS("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rfxi_ridgemu_rho2/age/rho_2_50.rds")
+
+
+p1 = fig_1_bias(50, allResults_50, allResults_rho_2_50, rho_0_50, 0, rho_2_50, ns = ns) + theme(legend.text = element_text(size = 18), plot.margin = margin(5, 25, 5, 5))
+p2 = fig_1_coverage(50, allResults_50, allResults_rho_2_50, rho_0_50, 0, rho_2_50, nsim = 500)
+
+
+
+# Extract legend from the first plot
+fig_1_legend <- get_legend(p1, legend_text_size = 18)
+
+# Remove legends from all plots
+plots_nolegend <- map(list(p1, p2), ~ .x +
+                        theme(legend.position = "none",
+                              plot.title = element_text(size = 20),
+                              axis.title = element_text(size = 20),
+                              axis.text = element_text(size = 20),
+                              legend.text = element_text(size = 18),
+                              title = element_text(size = 24)))
+
+# Combine plots into a grid with patchwork
+#plot_grid <- wrap_plots(plots_nolegend, nrow = 1, ncol = 2)
+fig1 <- cowplot::plot_grid(plotlist = plots_nolegend, nrow = 1, ncol = 2, rel_widths = c(1, 1), labels = c("A", "B"))
+
+# Add shared legend at the bottom
+p = fig1 / fig_1_legend + plot_layout(widths = c(1, 1), heights=c(1,0.1))
+```
+
+```{r, fig.height=8, fig.width=12}
+p
+```
+
+# Figure 2
+
+```{r, fig.height=14, fig.width=22}
+allResults_10_ridge_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_10.csv")
+allResults_10_ridge_age = truncate_cols(allResults_10_ridge_age)
+allResults_25_ridge_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_25.csv")
+allResults_25_ridge_age = truncate_cols(allResults_25_ridge_age)
+allResults_50_ridge_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_50.csv")
+allResults_50_ridge_age = truncate_cols(allResults_50_ridge_age)
+allResults_75_ridge_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_75.csv")
+allResults_75_ridge_age = truncate_cols(allResults_75_ridge_age)
+
+allResults_10_rf_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_10.csv")
+allResults_10_rf_age = truncate_cols(allResults_10_rf_age, num_end_cols = 1)
+allResults_25_rf_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_25.csv")
+allResults_25_rf_age = truncate_cols(allResults_25_rf_age, num_end_cols = 1)
+allResults_50_rf_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_50.csv")
+allResults_50_rf_age = truncate_cols(allResults_50_rf_age, num_end_cols = 1)
+allResults_75_rf_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_75.csv")
+allResults_75_rf_age = truncate_cols(allResults_75_rf_age, num_end_cols = 1)
+
+plot_panel_mult_full(c("ridge_age", "rf_age"), dt_labels = c("Ridge", "Random Forest"), type = "pq", cf = "inst", source_name = "ML Model:")
+```
+
+# Figure 3
+
+```{r, fig.height=14, fig.width=22}
+allResults_10_FC_7_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_7network/age/allResults_10.csv")
+allResults_10_FC_7_rf = truncate_cols(allResults_10_FC_7_rf)
+allResults_25_FC_7_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_7network/age/allResults_25.csv")
+allResults_25_FC_7_rf = truncate_cols(allResults_25_FC_7_rf)
+allResults_50_FC_7_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_7network/age/allResults_50.csv")
+allResults_50_FC_7_rf = truncate_cols(allResults_50_FC_7_rf)
+allResults_75_FC_7_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_7network/age/allResults_75.csv")
+allResults_75_FC_7 = truncate_cols(allResults_75_FC_7_rf)
+
+allResults_10_FC_17_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_17network/age/allResults_10.csv")
+allResults_10_FC_17_rf = truncate_cols(allResults_10_FC_17_rf)
+allResults_25_FC_17_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_17network/age/allResults_25.csv")
+allResults_25_FC_17_rf = truncate_cols(allResults_25_FC_17_rf)
+allResults_50_FC_17_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_17network/age/allResults_50.csv")
+allResults_50_FC_17_rf = truncate_cols(allResults_50_FC_17_rf)
+allResults_75_FC_17_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_17network/age/allResults_75.csv")
+allResults_75_FC_17_rf = truncate_cols(allResults_75_FC_17_rf)
+
+plot_panel_mult_full(c("FC_7_rf", "FC_17_rf"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+```
+
+# Figure S4
+
+```{r, fig.height=14, fig.width=22}
+allResults_10_FC_7_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_7network/age/allResults_10.csv")
+allResults_10_FC_7_ridge = truncate_cols(allResults_10_FC_7_ridge)
+allResults_25_FC_7_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_7network/age/allResults_25.csv")
+allResults_25_FC_7_ridge = truncate_cols(allResults_25_FC_7_ridge)
+allResults_50_FC_7_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_7network/age/allResults_50.csv")
+allResults_50_FC_7_ridge = truncate_cols(allResults_50_FC_7_ridge)
+allResults_75_FC_7_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_7network/age/allResults_75.csv")
+allResults_75_FC_7_ridge = truncate_cols(allResults_75_FC_7_ridge)
+
+allResults_10_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_10.csv")
+allResults_10_FC_17_ridge = truncate_cols(allResults_10_FC_17_ridge)
+allResults_25_FC_17 = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_25.csv")
+allResults_25_FC_17_ridge = truncate_cols(allResults_25_FC_17_ridge)
+allResults_50_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_50.csv")
+allResults_50_FC_17_ridge = truncate_cols(allResults_50_FC_17_ridge)
+allResults_75_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_75.csv")
+allResults_75_FC_17_ridge = truncate_cols(allResults_75_FC_17_ridge)
+
+plot_panel_mult_full(c("FC_7_ridge", "FC_17_ridge"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+```
+
+# Figure S5
+
+```{r, fig.height=14, fig.width=22}
+allResults_10_DKT_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/p_factor/allResults_10.csv")
+allResults_10_DKT_pfactor = truncate_cols(allResults_10_DKT_pfactor)
+allResults_25_DKT_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/p_factor/allResults_25.csv")
+allResults_25_DKT_pfactor = truncate_cols(allResults_25_DKT_pfactor)
+allResults_50_DKT_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/p_factor/allResults_50.csv")
+allResults_50_DKT_pfactor = truncate_cols(allResults_50_DKT_pfactor)
+allResults_75_DKT_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/p_factor/allResults_75.csv")
+allResults_75_DKT_pfactor = truncate_cols(allResults_75_DKT_pfactor)
+
+allResults_10_schaefer_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif_schaefer/p_factor/allResults_10.csv")
+allResults_10_schaefer_pfactor = truncate_cols(allResults_10_schaefer_pfactor)
+allResults_25_schaefer_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif_schaefer/p_factor/allResults_25.csv")
+allResults_25_schaefer_pfactor = truncate_cols(allResults_25_schaefer_pfactor)
+allResults_50_schaefer_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif_schaefer/p_factor/allResults_50.csv")
+allResults_50_schaefer_pfactor = truncate_cols(allResults_50_schaefer_pfactor)
+allResults_75_schaefer_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif_schaefer/p_factor/allResults_75.csv")
+allResults_75_schaefer_pfactor = truncate_cols(allResults_75_schaefer_pfactor)
+
+plot_panel_mult_full(c("DKT_pfactor", "schaefer_pfactor"), dt_labels = c("DKT", "Schaefer 300"), type = "pq", cf = "inst", source_name = "Atlas:")
+```
+
+
+
+

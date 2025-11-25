@@ -1,0 +1,179 @@
+---
+title: "Estimated SE vs SD plots"
+author: "Megan Jones"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+```{r}
+## load in allResults tables from settings to summarize
+allResults_10_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_10.csv"))
+allResults_25_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_25.csv"))
+allResults_50_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_50.csv"))
+allResults_75_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_75.csv"))
+
+allResults_10_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_10.csv"))
+allResults_25_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_25.csv"))
+allResults_50_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_50.csv"))
+allResults_75_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_75.csv"))
+```
+
+
+```{r, fig.height=7, fig.width=14}
+# function to get estimated standard error of the one-step estimator
+get_pq_inst_SE = function(dt){
+  #browser()
+  dt$pq_se_u = sqrt(expit((logit(dt$uCI_pq_inst ^2) - logit(dt$pq_inst^2))/qnorm(0.975)))
+  dt$pq_se_l = sqrt(expit((-(logit(dt$lCI_pq_inst ^2) - logit(dt$pq_inst^2))/qnorm(0.975))))
+  dt$pq_se = apply(dt, 1, function(x) max(x["pq_se_u"], x["pq_se_l"]))
+  
+  return(sapply(ns, function(n) mean(as.numeric(dt[dt$n == n, "pq_se"])))/sqrt(ns))
+}
+
+# function to compile estimated standard error and standard deviation into table for plotting
+plot_SE_SD <- function(dt_list, dt_labels, source_name = "", lims = c(0,0.15), title = ""){
+  #browser()
+  names(dt_list) = dt_labels
+  
+  # Combine datasets
+  plot_data = bind_rows(lapply(names(dt_list), function(name) {
+    dt = dt_list[[name]]
+    out <- dt %>%
+      group_by(n) %>%
+      summarize(
+        SD = sd(pq_inst),
+        .groups = "drop"
+      ) %>%
+      mutate(source = name)
+    out$SE = get_pq_inst_SE(dt)
+    out
+  }))
+  
+  # Dynamically assign shapes/linetypes for all sources
+  sources <- unique(plot_data$source)
+  shape_vals <- seq(0, length.out = length(sources)) %% 6 + 1  # Use shapes 1–6 cyclically
+  names(shape_vals) <- sources
+  
+  linetype_vals <- rep_len(1:3, length(sources))
+  names(linetype_vals) <- sources
+  
+  # Base plot
+  p = ggplot(plot_data, aes(x = SD, y = SE,
+                                 shape = source, linetype = source)) +
+    geom_abline(aes(slope = 1, intercept = 0), lty = 2) +
+    geom_point(size = 3, color =  "#56B4E9") +
+    geom_line(size = 1.2, color =  "#56B4E9") +
+    scale_x_continuous(name = "True SD",  limits = lims,  breaks = c(0, 0.05, 0.1)) +
+    scale_y_continuous(name = "Mean Estimated SE", limits = lims) +
+    scale_shape_manual(
+      name = source_name,
+      values = shape_vals
+    ) +
+    scale_linetype_manual(
+      name = source_name,
+      values = linetype_vals
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      legend.title = element_text(size = 22),
+      legend.text = element_text(size = 22),
+      legend.key.size = unit(40, "pt"),
+      legend.position = "bottom"
+    ) +
+    ggtitle(title)
+  
+
+  
+  p = p +
+    guides(
+      shape = guide_legend(title = source_name, reverse = TRUE),
+      linetype = guide_legend(title = source_name, reverse = TRUE)
+    )
+  
+  return(p)
+}
+
+plot_SE_SD_panel <- function(dt_suffixes, dt_labels, ...) {
+  # Create list of all data.frames
+  dt_list = list(r10 = list(), r25 = list(), r50 = list(), r75 = list())
+  i = 1
+  for (s in dt_suffixes){
+    dt_list$r10[[i]] = get(paste0("allResults_10_",s))
+    dt_list$r25[[i]] = get(paste0("allResults_25_",s))
+    dt_list$r50[[i]] = get(paste0("allResults_50_",s))
+    dt_list$r75[[i]] = get(paste0("allResults_75_",s))
+    i = i + 1
+  }
+  names(dt_list$r10) = names(dt_list$r25) = names(dt_list$r50) = names(dt_list$r75) = dt_labels
+  
+  # Titles for columns
+  titles <- list(
+    r10 = "MAPA = 0.1",
+    r25 = "MAPA = 0.25",
+    r50 = "MAPA = 0.5",
+    r75 = "MAPA = 0.75"
+  )
+  
+  # plots
+  plist <- list(
+    plot_SE_SD(dt_list = dt_list$r10, dt_labels = dt_labels, title = titles$r10,...),
+    plot_SE_SD(dt_list = dt_list$r25, dt_labels = dt_labels, title = titles$r25,...),
+    plot_SE_SD(dt_list = dt_list$r50, dt_labels = dt_labels, title = titles$r50,...),
+    plot_SE_SD(dt_list = dt_list$r75, dt_labels = dt_labels, title = titles$r75,...)
+  )
+  
+  
+  # Get legend from the first bias plot
+  legend <- get_legend(plist[[1]])
+  
+  # Combine plots into a list, flattening rows
+  plots <- c(plist)
+  
+  # Apply consistent theming
+  plots_nolegend <- map2(plots, seq_along(plots), function(p, i) {
+    col_idx <- ((i - 1) %% 4) + 1
+    
+    is_left_col <- col_idx == 1
+    
+    p + theme(
+      legend.position = "none",
+      axis.title.x = element_blank(),
+      axis.title.y = if (!is_left_col) element_blank() else element_text(size = 28),
+      axis.text.x = element_text(size = 18),
+      axis.text.y = element_text(size = 18),
+      plot.title = element_text(size = 30)
+    )
+  })
+  
+  # Plot grid
+  plot_grid <- wrap_plots(plots_nolegend, nrow = 1, ncol = 4, byrow = TRUE)
+  
+  # Add shared legend below
+  final_plot <- plot_grid / legend + plot_layout(heights = c(1, 0.1))
+  
+  xaxis_label <- ggplot() + 
+    theme_void() +
+    annotate("text", x = 0.5, y = 0.5, label = "True SD", size = 8, hjust = 0.5)
+  
+  # Combine grid + legend + x-axis label
+  final_plot <- (plot_grid / xaxis_label / legend) + 
+    plot_layout(heights = c(1, 0.05, 0.1))
+  
+  return(final_plot)
+}
+
+plot_SE_SD_panel(c("ridge_age", "rf_age"), c("Ridge", "Random Forest"), lims = c(0, 0.12))
+
+```

@@ -1,5 +1,5 @@
 ---
-title: "Ishaan BWAS Analysis Ridge Regression"
+title: "HBN Site SI Analysis Ridge Regression"
 author: "Ishaan Gadiyar"
 date: "`r Sys.Date()`"
 output:
@@ -12,9 +12,11 @@ output:
     highlight: haddock
 ---
 
+This performs the ridge regression analysis for HBN SI site (Figures S7, S8, Table S3).
+
 # Loading in Libraries
 
-```{r, message = FALSE, warnings = FALSE}
+```{r, message = FALSE, warning = FALSE}
 library(tidyverse)
 library(vtable)
 library(knitr) 
@@ -24,6 +26,8 @@ library(table1)
 library(boot)
 library(ggplot2)
 library(GGally)
+library(Hmisc)
+library(kableExtra)
 
 # Setting the seed
 set.seed(123)
@@ -51,7 +55,7 @@ sum(rbc$participant_id == func$participant_id) == nrow(func)
 
 # Merging datasets
 cols_to_add <- setdiff(names(func), names(rbc))
-both <- cbind(rbc, func[cols_to_add])
+both <- dplyr::inner_join(rbc, func[, c("participant_id", cols_to_add)], by = "participant_id")
 
 # Changing sex to a binary - Male = 1; Female = 0
 both = both %>% mutate(sex = ifelse(sex == "Male", 1, 0))
@@ -783,7 +787,7 @@ ratio_results <- ggplot(results, aes(x = Type, y = ratio)) +
        y = "Ratio") +
   theme_bw() + 
   theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
-  geom_hline(yintercept = 0, linetype = "dashed", color = "black") 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black") 
 ratio_results
 
 # Saving to square dimensions

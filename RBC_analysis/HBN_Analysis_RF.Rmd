@@ -1,5 +1,5 @@
 ---
-title: "Ishaan BWAS Analysis Random Forest"
+title: "HBN Site SI Analysis Random Forest"
 author: "Ishaan Gadiyar"
 date: "`r Sys.Date()`"
 output:
@@ -12,13 +12,15 @@ output:
     highlight: haddock
 ---
 
+This performs the random forest analysis for HBN SI site (Figures S7, S8, Table S3).
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Loading in Libraries
 
-```{r, message = FALSE, warnings = FALSE}
+```{r, message = FALSE, warning = FALSE}
 library(tidyverse)
 library(vtable)
 library(knitr) 
@@ -32,6 +34,8 @@ library(ranger)
 library(tuneRanger)
 library(mlr)
 library(table1)
+library(Hmisc)
+library(kableExtra)
 
 # Setting the seed
 set.seed(123)
@@ -55,7 +59,7 @@ sum(rbc$participant_id == func$participant_id) == nrow(func)
 
 # Merging datasets
 cols_to_add <- setdiff(names(func), names(rbc))
-both_total <- cbind(rbc, func[cols_to_add])
+both_total <- dplyr::inner_join(rbc, func[, c("participant_id", cols_to_add)], by = "participant_id")
 
 # Subsetting study site to HBNsiteSI
 both = both_total %>% filter(study_site == "HBNsiteSI")
@@ -719,7 +723,7 @@ ratio_results <- ggplot(results, aes(x = Type, y = ratio)) +
        y = "Ratio") +
   theme_bw() + 
   theme(axis.text.x = element_text(angle = 45, hjust=1)) + 
-  geom_hline(yintercept = 0, linetype = "dashed", color = "black") 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black") 
 ratio_results
 
 # Saving to square dimensions

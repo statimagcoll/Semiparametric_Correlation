@@ -1,0 +1,74 @@
+---
+title: "Convergence rate table"
+author: "Megan Jones"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+This produces Table S2.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+```{r}
+# source functions
+source("/media/disk2/multivariateBWAS/paper_code/simulation_code/functions/results_funcs.R")
+
+## load in allResults tables from settings to summarize
+allResults_10_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_10.csv"))
+allResults_25_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_25.csv"))
+allResults_50_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_50.csv"))
+allResults_75_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_75.csv"))
+
+allResults_10_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_10.csv"))
+allResults_25_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_25.csv"))
+allResults_50_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_50.csv"))
+allResults_75_rf_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_75.csv"))
+```
+
+
+```{r}
+# function to fit power law to estimate rate of convergence
+# dt: allResults
+fit_power_law <- function(dt, rho_target, alpha_start = -0.5, beta_start = 0.5){
+  #browser()
+  
+  dt_mean <- dt %>%
+    group_by(n) %>%
+    summarize(p_inst = mean(p_inst),
+              pq_inst = mean(pq_inst))
+  
+  
+  fit_p = nls(p_inst ~ alpha*n^-beta + rho_target, data = dt,
+              start = list(alpha = alpha_start, beta = beta_start),
+              algorithm="port", lower=c(-Inf,0), upper=c(0,Inf),
+              control = nls.control(maxiter = 100, minFactor = 1e-6))
+  
+  fit_pq = nls(pq_inst ~ alpha*n^-beta + rho_target, data = dt,
+              start = list(alpha = alpha_start, beta = beta_start),
+              algorithm="port", lower=c(-Inf,0), upper=c(0,Inf), # constrain parameters
+              control = nls.control(maxiter = 100, minFactor = 1e-6))
+  
+  cbind(coef(fit_p), confint(fit_p)[,1:2], coef(fit_pq), confint(fit_pq)[,1:2])
+}
+
+
+fit_power_law(allResults_10_ridge_age, 0.1, beta_start = 0.2)
+fit_power_law(allResults_25_ridge_age, 0.25)
+fit_power_law(allResults_50_ridge_age, 0.5)
+fit_power_law(allResults_75_ridge_age, 0.75)
+
+
+fit_power_law(allResults_10_rf_age, 0.1, beta_start = 0.2)
+fit_power_law(allResults_25_rf_age, 0.25, beta_start = 0.2)
+fit_power_law(allResults_50_rf_age, 0.5, beta_start = 0.2)
+fit_power_law(allResults_75_rf_age, 0.75, beta_start = 0.2)
+```

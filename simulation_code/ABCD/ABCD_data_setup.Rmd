@@ -1,0 +1,79 @@
+---
+title: "ABCD Data Setup"
+author: "Megan Jones, Kaidi Kang"
+date: "2025-05-03"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code is modified from Kaidi Kang's code.
+
+This file sets up the needed ABCD data for the ML brain-phenotype associations project. We will use baseline scans and include:
+
+* Structural: regional grey matter volume (GMV) from (Desikan-Killiany atlas, 68 predictors)
+  + This can be found for all participants in Kaidi's cleaned data
+  + 11084 participants after QC
+* Phenotypes to predict: age, fluid intelligence, depression score
+* Site
+* Other demographic variables
+
+We use the QC files to exclude data as needed
+
+Will need to deal with site effects
+
+```{r}
+library(readr)
+library(pbmcapply)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+
+
+```
+
+# Structural Data Prep
+
+```{r}
+data_struct = readr::read_csv("/media/disk2/ABCD_release5/ABCD_release5_cleaned.csv")
+# filter to baseline
+data_struct %<>% filter(eventname == "baseline_year_1_arm_1")
+
+data_struct$id = stringr::str_remove(data_struct$src_subject_id, "_")
+
+data_struct %<>% dplyr::select(id, src_subject_id, dx, starts_with("nihtbx"), BMI, sex_01, starts_with("cbcl"), ehi_y_ss_scoreb, age_years, site, bw, starts_with("lh_Vol"), starts_with("rh_Vol"))
+
+# merge with quality control
+data_struct = merge(data_struct, QC)
+
+# include only those with a 1 for t1 QC
+data_struct %<>% filter(imgincl_t1w_include == 1)
+
+# remove any missing FC
+ids = na.omit(data_struct[,c("id", grep("Vol", colnames(data_struct), value = T))])$id
+data_struct = data_struct[data_struct$id %in% ids,]
+
+write.csv(data_struct, "/media/disk2/multivariateBWAS/ABCD_sims/ABCD_struct.csv")
+```
+
+# Data Harmonization
+
+Save versions of the data that have had site effects addressed via CovBat
+
+
+```{r}
+library(CovBat)
+
+data_struct_covbat = covbat(dat = t(data_struct[,grep("Vol", colnames(data_struct), value = T)]),
+                            bat = data_struct$site)
+
+data_struct_harmonized = data_struct
+data_struct_harmonized[,grep("Vol", colnames(data_struct), value = T)] = t(data_struct_covbat$dat.covbat)
+
+# save harmonized data
+write.csv(data_struct_harmonized, "/media/disk2/multivariateBWAS/ABCD_sims/ABCD_struct_harmonized.csv")
+```

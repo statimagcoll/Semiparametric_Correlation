@@ -1,0 +1,960 @@
+---
+title: "Organizing and harmonizing RBC data"
+author: "Megan Jones"
+output: html_document
+date: "2025-06-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Study-level information
+
+We are planning to use the phenotype: age, internalizing_mcelroy_harmonized_all_samples, externalizing_mcelroy_harmonized_all_samples
+We will also adjust models for: Euler number, Mean frame displacement (FD)
+
+```{r}
+library(readr)
+library(dplyr)
+library(magrittr)
+library(purrr)
+
+# list the five studies
+studies = c("BHRC", "CCNP", "HBN", "NKI", "PNC")
+
+RBC_path = "/media/disk2/RBC_version0.1/"
+
+# get the demographic, structural QC, and functional QC for each study
+for (s in studies){
+  assign(paste0("demo_",s), read_tsv(paste0(RBC_path, s, "_BIDS/study-", s, "_desc-participants.tsv")))
+  assign(paste0("func_qc_",s), read_tsv(paste0(RBC_path, s, "_CPAC/cpac_RBCv0/study-", s, "_desc-functional_qc.tsv")))
+  assign(paste0("t1_qc_",s), read_tsv(paste0(RBC_path, s, "_FreeSurfer/study-", s, "_desc-T1_qc.tsv")))
+}
+```
+
+# Individual Files
+
+## Structural
+
+Extract the regional GMV for each participant, from both the Desikan-Killiany-Tourville atlas, and the Schaefer 300 (17 Network) atlas 
+
+```{r}
+for (s in studies){
+  # Define the directory containing the subject folders
+  base_dir <- paste0(RBC_path, s, "_FreeSurfer/freesurfer")
+  
+  # may need to do the pattern per study (Session info differs)
+  # Find all the FC files recursively
+  assign(paste0("struct_files_",s), list.files(
+    path = base_dir,
+    pattern = "_regionsurfacestats.tsv$",
+    full.names = TRUE,
+    recursive = TRUE
+  ))
+  
+ 
+  # Read and combine all files, tagging each with subject ID
+  # FC_BHRC <- map_dfr(tsv_files, function(file) {
+  #   # Extract subject ID from filename
+  #   #subject_id <- sub(".*sub-([0-9]+)_ses-2.*", "sub-\\1", file)
+  #   
+  #   read_tsv(file, show_col_types = FALSE)
+  # })
+}
+
+struct_files_BHRC = grep("_ses-1", struct_files_BHRC, value = TRUE)
+struct_files_NKI = grep("-BAS1", struct_files_NKI, value = TRUE)
+```
+
+```{r, eval=FALSE}
+# checking data is present for all participants
+for (s in studies){
+  # List all subfolders matching the pattern
+  subject_dirs = list.dirs(paste0(RBC_path,s,"_FreeSurfer/freesurfer/"), recursive = F, full.names = FALSE)
+  
+  if(s == "BHRC"){
+    subject_dirs = grep("_ses-1", subject_dirs, value = TRUE)
+  }
+  
+  if(s == "NKI"){
+    subject_dirs = grep("_ses-BAS1$", subject_dirs, value = TRUE)
+  }
+
+  assign(paste0("all_struct_ids_", s), gsub(".*(sub-[^_/]+).*", "\\1", subject_dirs))
+  assign(paste0("downloaded_struct_ids_", s), gsub(".*(sub-[^_/]+).*", "\\1", get(paste0("struct_files_", s))))
+}
+
+# got all downloaded structural data
+```
+
+```{r}
+# add all structural data to one dataset
+temporalpole_ids = frontalpole_ids = c()
+for (s in studies){
+  demo = get(paste0("demo_", s))
+  t1_qc = get(paste0("t1_qc_", s))
+  dataset_struct = data.frame()
+  for(f in get(paste0("struct_files_", s))){
+    # individual id
+    # also keep DKT atlas (62) in case of future need for lower dim
+    struct <- read_tsv(f, show_col_types = F)
+    id = sub("sub-", "", struct$subject_id[1])
+    if("temporalpole" %in% unlist(struct[struct$atlas == "aparc.DKTatlas", "StructName"])){
+      temporalpole_ids = c(temporalpole_ids, paste0(s,"_",id)) # only some have them
+    }
+    if("frontalpole" %in% unlist(struct[struct$atlas == "aparc.DKTatlas", "StructName"])){
+      frontalpole_ids = c(frontalpole_ids, paste0(s,"_",id)) # only some have them
+    }
+    struct %<>% filter(atlas %in% c("Schaefer2018_300Parcels_17Networks_order", "aparc.DKTatlas") & !(StructName %in% c("Background+FreeSurfer_Defined_Medial_Wall", "temporalpole", "frontalpole")))
+    
+    # for DKT, need to add hemisphere to the structname so it is unique
+    struct$StructName = ifelse(struct$atlas == "aparc.DKTatlas", paste0(struct$hemisphere, "_", struct$StructName), struct$StructName)
+
+    struct = struct %>% select(StructName, GrayVol) %>% pivot_wider(names_from = StructName, values_from = GrayVol)
+    
+    # HBN doesn't need session id, NKI is BAS1, PNC is PNC1
+    
+    demo_sub = demo %>% filter(participant_id == id, session_id %in% c(1, "BAS1", "PNC1", unique(demo_HBN$session_id)))
+    
+    t1_qc_sub = t1_qc  %>% filter(participant_id == id, session_id %in% c(1, "BAS1", "PNC-1", unique(demo_HBN$session_id))) %>% select(-c(participant_id, session_id, study))
+    # concatenate data for one subject
+    sub_data_struct = cbind(demo_sub, t1_qc_sub, struct)
+    dataset_struct = rbind(dataset_struct, sub_data_struct)
+  }
+  assign(paste0("struct_", s), dataset_struct)
+  }
+
+
+# combine the five datasets into one
+struct_all = rbind(struct_BHRC, struct_CCNP, struct_HBN, struct_NKI, struct_PNC)
+
+# save (unharmonized) version
+write.csv(struct_all, paste0(RBC_path, "regional_GMV_all_sites_unharmonized.csv"))
+```
+
+## Functional
+
+One file per participant with a 300x300 matrix of regional functional connectivity from the Schaefer 300 atlas. Also need to generate network functional connectivity across the 17 networks
+
+```{r}
+# for each study
+for (s in studies){
+  # Define the directory containing the subject folders
+  base_dir <- paste0("/media/disk2/RBC_version0.1/", s, "_CPAC/cpac_RBCv0")
+  
+  FC_pattern = ".*_task-rest.*atlas-Schaefer2018p300n17_.*36Parameter_desc-PearsonNilearn_correlations.tsv$"
+  
+  # Find all the FC files recursively
+  assign(paste0("FC_files_",s), list.files(
+    path = base_dir,
+    pattern = FC_pattern,
+    full.names = TRUE,
+    recursive = TRUE
+  ))
+}
+
+# need to find the actually downloaded files for HBN
+downloaded_FC_files_HBN <- FC_files_HBN[file.exists(FC_files_HBN)]
+
+downloaded_FC_files_NKI = FC_files_NKI[file.exists(FC_files_NKI)]
+downloaded_FC_files_PNC = FC_files_PNC[file.exists(FC_files_PNC)]
+
+```
+
+```{r}
+# checking data is present for all participants
+for (s in studies){
+  # List all subfolders matching the pattern
+  subject_dirs = list.dirs(paste0(RBC_path,s,"_CPAC/cpac_RBCv0/"), recursive = F, full.names = FALSE)
+
+  assign(paste0("all_FC_ids_", s), gsub(".*(sub-[^_/]+).*", "\\1", subject_dirs))
+  assign(paste0("downloaded_FC_ids_", s), gsub(".*(sub-[^_/]+).*", "\\1", get(paste0("downloaded_FC_files_", s))))
+}
+
+
+# make sure these are only appearing because they have a second session or only a anat folder for first session
+extra_BHRC = all_FC_ids_BHRC[which(!(all_FC_ids_BHRC %in% downloaded_FC_ids_BHRC))]
+missing_BHRC <- extra_BHRC[sapply(extra_BHRC, function(subj) {
+  file.exists(file.path(RBC_path, "BHRC_CPAC/cpac_RBCv0", subj, "ses-1/func"))
+})]
+# some of these had to use run 2 or 3 for QC
+# manually add these
+BHRC_FC_path = paste0(RBC_path, "BHRC_CPAC/cpac_RBCv0")
+
+missing_BHRC_info <- data.frame(
+  id = c("10644", "10788", "10921", "20082", "20141", "20204", "20671", "20880", "20982", "21106"),
+  run = c("3", "2", "3", "2", "2", "2", "2", "2", "1", "2"),
+  acq = c("", "acq-VARIANTEffectiveEchoSpacing_", "", "", "", "", "", "", "acq-VARIANTNumVolumes_", "")
+)
+
+FC_files_BHRC <- c(FC_files_BHRC, sprintf(
+  "%s/sub-%s/ses-1/func/sub-%s_ses-1_task-rest_run-%s_%satlas-Schaefer2018p300n17_space-MNI152NLin6ASym_reg-36Parameter_desc-PearsonNilearn_correlations.tsv",
+  BHRC_FC_path, missing_BHRC_info$id, missing_BHRC_info$id, missing_BHRC_info$run, missing_BHRC_info$acq
+))
+ 
+extra_CCNP = all_FC_ids_CCNP[which(!(all_FC_ids_CCNP %in% downloaded_FC_ids_CCNP))]
+get_preferred_CCNP_files <- function(subject_dirs, dataset_root = "/media/disk2/RBC_version0.1/CCNP_CPAC") {
+  setwd(dataset_root)
+
+  # List all tracked files
+  all_files <- system("git ls-files", intern = TRUE)
+
+  matched_files <- sapply(subject_dirs, function(subj) {
+    pattern <- paste0(
+      "cpac_RBCv0/", subj,
+      "/ses-1/func/",
+      subj, "_ses-1_task-rest_run-[0-9]{2}(_[^_]+)?_atlas-Schaefer2018p300n17_.*PearsonNilearn_correlations.tsv$"
+    )
+
+    matches <- grep(pattern, all_files, value = TRUE)
+
+    # If multiple runs exist, pick the one with the lowest run number
+    if (length(matches) > 0) {
+      run_nums <- as.integer(sub(".*_run-([0-9]{2}).*", "\\1", matches))
+      matches[which.min(run_nums)]
+    } else {
+      NA
+    }
+  })
+
+  matched_files <- na.omit(matched_files)
+  return(matched_files)
+}
+
+CCNP_files_to_get <- get_preferred_CCNP_files(extra_CCNP)
+# get them with datalad
+for (f in CCNP_files_to_get) {
+  message("Getting ", f)
+  system2("datalad", c("get", f))
+}
+
+
+
+extra_HBN = all_FC_ids_HBN[which(!(all_FC_ids_HBN %in% downloaded_FC_ids_HBN))]
+get_preferred_HBN_files <- function(subject_dirs, dataset_root = "/media/disk2/RBC_version0.1/HBN_CPAC") {
+  setwd(dataset_root)
+
+  # List all tracked files
+  all_files <- system("git ls-files", intern = TRUE)
+
+  matched_files <- sapply(subject_dirs, function(subj) {
+    # Regex pattern for that subject, flexible session name and optional VARIANT
+    pattern <- paste0(
+      "cpac_RBCv0/", subj, "/ses-[^/]+/func/",
+      subj, ".*_task-rest_.*_atlas-Schaefer2018p300n17_.*36Parameter_desc-PearsonNilearn_correlations.tsv$"
+    ) # make as general as possible
+
+    matches <- grep(pattern, all_files, value = TRUE)
+
+    if (length(matches) > 0) {
+      # Pick run with lowest number
+      run_nums <- as.integer(sub(".*_run-([0-9]+).*", "\\1", matches))
+      matches[which.min(run_nums)]
+    } else {
+      NA
+    }
+  })
+
+  matched_files <- na.omit(matched_files)
+  return(matched_files)
+}
+HBN_files_to_get = get_preferred_HBN_files(extra_HBN)
+saveRDS(HBN_files_to_get, "/media/disk2/RBC_version0.1/HBN_files_to_get.rds") # get in screen
+# still missing many
+extra_HBN = all_FC_ids_HBN[which(!(all_FC_ids_HBN %in% downloaded_FC_ids_HBN))] # 595
+get_preferred_files_fast <- function(subject_dirs, dataset_root = "/media/disk2/RBC_version0.1/HBN_CPAC") {
+  setwd(dataset_root)
+
+  # Get all files once
+  all_files <- system("git ls-files", intern = TRUE)
+
+  # Pre-filter to relevant correlation files
+  filtered_files <- grep(
+    ".*_task-rest.*Schaefer2018p300n17.*36Parameter_desc-PearsonNilearn_correlations.tsv$", 
+    all_files, 
+    value = TRUE
+  )
+
+  # Keep only files within the cpac_RBCv0 pipeline
+  filtered_files <- grep("cpac_RBCv0/sub-", filtered_files, value = TRUE)
+
+  # Main loop with progress bar
+  best_file <- pbapply::pbsapply(subject_dirs, function(subj) {
+    subj_files <- filtered_files[grepl(paste0("cpac_RBCv0/", subj, "/"), filtered_files)]
+
+    if (length(subj_files) == 0) return(NA)
+
+    # Try to extract run number
+    run_matches <- regmatches(subj_files, regexpr("_run-\\d+", subj_files))
+    run_nums <- as.integer(gsub("_run-", "", run_matches))
+    
+    if (all(is.na(run_nums))) {
+      # No run numbers present — return the first match arbitrarily
+      return(subj_files[1])
+    } else {
+      # Return the file with the lowest run number
+      return(subj_files[which.min(run_nums)])
+    }
+  }, USE.NAMES = TRUE)
+
+  return(na.omit(best_file))
+}
+HBN_files_to_get = get_preferred_HBN_files_fast(extra_HBN)
+HBN_ids_to_get = gsub(".*(sub-[^_/]+).*", "\\1", HBN_files_to_get)
+extra_HBN_still = all_FC_ids_HBN[which(!(all_FC_ids_HBN %in% c(downloaded_FC_ids_HBN, HBN_ids_to_get)))]
+# some have no func passing qc
+check_for_func_HBN = function(subj){
+  #browser()
+  sess_dirs <- list.dirs(file.path(RBC_path, "HBN_CPAC/cpac_RBCv0", subj), recursive = FALSE, full.names = TRUE)
+  
+  # Find session directories (e.g., those starting with "ses-")
+  sess_dirs <- sess_dirs[grepl("ses-", basename(sess_dirs))]
+  
+  # Check if any of them has a "func" subfolder
+  has_func <- any(file.exists(file.path(sess_dirs, "func")))
+}
+extra_HBN_still = extra_HBN_still[sapply(extra_HBN_still, check_for_func_HBN)]
+# some only have other tasks
+has_rest_func <- function(subj, base_dir = "/media/disk2/RBC_version0.1/", site_prefix = "HBN_CPAC/cpac_RBCv0") {
+  #browser()
+  
+  subjects_with_rest <- c()
+  
+  pb <- progress_bar$new(
+    format = "  checking [:bar] :percent eta: :eta",
+    total = length(subj),
+    clear = FALSE, width = 60
+  )
+  
+
+    pb$tick()
+    
+    subj_dir <- file.path(base_dir, site_prefix, subj)
+    
+    if (!dir.exists(subj_dir)) next
+    
+    sess_dirs <- list.dirs(subj_dir, recursive = FALSE, full.names = TRUE)
+    sess_dirs <- sess_dirs[grepl("ses-", basename(sess_dirs))]
+    
+    for (sess in sess_dirs) {
+      func_dir <- file.path(sess, "func")
+      if (!dir.exists(func_dir)) next
+      
+      files <- list.files(func_dir, pattern = "task-rest", full.names = TRUE, recursive = TRUE)
+      return(any(file.exists(files))) 
+      
+    }
+
+}
+extra_HBN_still = extra_HBN_still[sapply(extra_HBN_still, has_rest_func)] # all should be done now
+saveRDS(HBN_files_to_get, "/media/disk2/RBC_version0.1/HBN_files_to_get.rds")
+
+```
+
+
+```{r}
+# NKI
+extra_NKI = all_FC_ids_NKI[which(!(all_FC_ids_NKI %in% downloaded_FC_ids_NKI))]
+NKI_files_to_get = get_preferred_files_fast(extra_NKI, dataset_root = "/media/disk2/RBC_version0.1/NKI_CPAC")
+NKI_ids_to_get = gsub(".*(sub-[^_/]+).*", "\\1", NKI_files_to_get)
+extra_NKI_still = extra_NKI[!(extra_NKI %in% NKI_ids_to_get)]
+saveRDS(NKI_files_to_get, "/media/disk2/RBC_version0.1/NKI_files_to_get.rds")
+```
+
+```{r}
+extra_PNC = all_FC_ids_PNC[which(!(all_FC_ids_PNC %in% downloaded_FC_ids_PNC))]
+PNC_files_to_get = get_preferred_files_fast(extra_PNC, dataset_root = "/media/disk2/RBC_version0.1/PNC_CPAC")
+PNC_ids_to_get = gsub(".*(sub-[^_/]+).*", "\\1", PNC_files_to_get)
+extra_PNC_still = extra_PNC[!(extra_PNC %in% PNC_ids_to_get)]
+saveRDS(PNC_files_to_get, "/media/disk2/RBC_version0.1/PNC_files_to_get.rds")
+
+# ultimately check subject count against qc file if possible
+```
+
+```{r}
+
+CCNP_ids_to_get = gsub(".*(sub-[^_/]+).*", "\\1", CCNP_files_to_get)
+extra_CCNP_still = extra_CCNP[!(extra_CCNP %in% CCNP_ids_to_get)]
+saveRDS(CCNP_files_to_get, "/media/disk2/RBC_version0.1/CCNP_files_to_get.rds")
+
+```
+
+```{r}
+# getting missing FC files
+# BHRC
+
+subjects = paste0("sub-", c(20982))
+
+# Base path to the datalad dataset
+base_path <- paste0(RBC_path, "BHRC_CPAC/cpac_RBCv0")
+
+# Run datalad get for each subject
+for (subj in subjects) {
+  run = 1
+  status = 1
+  while(status != 0 & run < 5){
+    file_suffix = paste0("sub-11111_ses-1_task-rest_run-", run, "_acq-VARIANTNumVolumes_atlas-Schaefer2018p300n17_space-MNI152NLin6ASym_reg-36Parameter_desc-PearsonNilearn_correlations.tsv")
+    subj_file <- file.path(base_path, subj, "ses-1/func", gsub("sub-[^_]+", subj, file_suffix))
+  cat("Getting", subj_file, "\n")
+    status <- system2("datalad", c("get", subj_file))
+  
+  if (status != 0) {
+    message("Error getting file: ", subj_file)
+    # increase run
+    run = run + 1
+  } else {
+    message("Successfully got: ", subj_file)
+  }
+  }
+}
+
+```
+
+# Assembling FC data
+
+```{r}
+FC_pattern = ".*_task-rest.*atlas-Schaefer2018p300n17_.*36Parameter_desc-PearsonNilearn_correlations.tsv$"
+for (s in studies){
+  # Define the directory containing the subject folders
+  base_dir <- paste0("/media/disk2/RBC_version0.1/", s, "_CPAC/cpac_RBCv0")
+
+  # Find all the FC files recursively
+  assign(paste0("FC_files_",s), list.files(
+    path = base_dir,
+    pattern = FC_pattern,
+    full.names = TRUE,
+    recursive = TRUE
+  ))
+
+  assign(paste0("downloaded_FC_ids_", s), gsub(".*(sub-[^_/]+).*", "\\1", get(paste0("FC_files_", s))))
+}
+```
+
+
+```{r}
+# the ones still "missing" should  be structural artifact (not full pass)
+# check against QC
+func_qc_keep_BHRC <- func_qc_BHRC %>% filter(session_id == 1 & fmriExclude == 0 & task == "rest")
+length(unique(func_qc_keep_BHRC$participant_id))
+length(unique(downloaded_FC_ids_BHRC))
+which(!(unique(func_qc_keep_BHRC$participant_id) %in% as.numeric(gsub("sub-", "", unique(downloaded_FC_ids_BHRC)))))
+
+func_qc_keep_CCNP <- func_qc_CCNP %>% filter(session_id == 1 & fmriExclude == 0 & task == "rest")
+length(unique(func_qc_keep_CCNP$participant_id))
+length(unique(downloaded_FC_ids_CCNP))
+unique(func_qc_keep_CCNP$participant_id)[which(!(unique(func_qc_keep_CCNP$participant_id) %in%  gsub("sub-", "", unique(downloaded_FC_ids_CCNP))))]
+
+func_qc_keep_HBN <- func_qc_HBN %>% filter(fmriExclude == 0 & task == "rest")
+length(unique(func_qc_keep_HBN$participant_id))
+length(unique(downloaded_FC_ids_HBN))
+which(!(unique(func_qc_keep_HBN$participant_id) %in% gsub("sub-", "", unique(downloaded_FC_ids_HBN))))
+
+func_qc_keep_NKI <- func_qc_NKI %>% filter(session_id %in% c("BAS1", "BAS2") & fmriExclude == 0 & task == "rest")
+length(unique(func_qc_keep_NKI$participant_id))
+length(unique(downloaded_FC_ids_NKI))
+which(!(unique(func_qc_keep_NKI$participant_id) %in% gsub("sub-", "", unique(downloaded_FC_ids_NKI))))
+
+func_qc_keep_PNC <- func_qc_PNC %>% filter(fmriExclude == 0 & task == "rest")
+length(unique(func_qc_keep_PNC$participant_id))
+length(unique(downloaded_FC_ids_PNC))
+which(!(unique(func_qc_keep_PNC$participant_id) %in%  gsub("sub-", "", unique(downloaded_FC_ids_PNC))))
+
+
+
+# compare to structural ids
+struct_all = read.csv(paste0(RBC_path, "regional_GMV_all_sites_unharmonized.csv"))
+struct_ids_BHRC = unlist(struct_all %>% filter(study == "BHRC") %>% select(participant_id))
+length(struct_ids_BHRC); length(unique(downloaded_FC_ids_BHRC)); length(unique(func_qc_keep_BHRC$participant_id)) # 424 vs 539 vs 461
+struct_ids_BHRC[(!(struct_ids_BHRC %in% as.numeric(gsub("sub-", "", unique(downloaded_FC_ids_BHRC)))))] # these 3 extra passed structural but not functional - seems like they shouldn't have been included in complete-pass?
+length(which(unique(func_qc_keep_BHRC$participant_id) %in% struct_ids_BHRC)) # 417
+struct_qc_ids_BHRC = unlist(t1_qc_BHRC %>% filter(qc_determination == "Pass" & session_id==1) %>% select(participant_id))
+struct_qc_ids_BHRC[which(!(struct_qc_ids_BHRC %in% struct_ids_BHRC))] # none
+
+struct_ids_CCNP = unlist(struct_all %>% filter(study == "Colornest") %>% select(participant_id))
+length(struct_ids_CCNP); length(unique(downloaded_FC_ids_CCNP)); length(unique(func_qc_keep_CCNP$participant_id)) # 178 vs 178 vs 194
+struct_ids_CCNP[(!(struct_ids_CCNP %in% gsub("sub-", "", unique(downloaded_FC_ids_CCNP))))] # none
+length(which(unique(func_qc_keep_CCNP$participant_id) %in% struct_ids_CCNP)) # all
+struct_qc_ids_CCNP = unlist(t1_qc_CCNP %>% filter(qc_determination == "Pass" &session_id==1) %>% select(participant_id))
+struct_qc_ids_CCNP[which(!(struct_qc_ids_CCNP %in% struct_ids_CCNP))] # none
+
+struct_ids_HBN = unlist(struct_all %>% filter(study == "HBN") %>% select(participant_id))
+length(struct_ids_HBN); length(unique(downloaded_FC_ids_HBN)); length(unique(func_qc_keep_HBN$participant_id)) # 1390 vs 1286 vs 1891
+struct_ids_HBN[(!(struct_ids_HBN %in% gsub("sub-", "", unique(downloaded_FC_ids_HBN))))] # many extra, quick spot check shows could be for other tasks
+length(which(unique(func_qc_keep_HBN$participant_id) %in% struct_ids_HBN)) # 1189
+struct_qc_ids_HBN = unlist(t1_qc_HBN %>% filter(qc_determination == "Pass") %>% select(participant_id))
+which(!(unique(func_qc_keep_HBN$participant_id) %in% gsub("sub-", "", unique(downloaded_FC_ids_HBN))) & unique(func_qc_keep_HBN$participant_id) %in% struct_qc_ids_HBN) #none
+struct_qc_ids_HBN[which(!(struct_qc_ids_HBN %in% struct_ids_HBN))] # none
+
+
+struct_ids_NKI = unlist(struct_all %>% filter(study == "NKI") %>% select(participant_id))
+length(struct_ids_NKI); length(unique(downloaded_FC_ids_NKI)); length(unique(func_qc_keep_NKI$participant_id)) # 1075 vs 1161 vs 1254
+struct_ids_NKI[(!(struct_ids_NKI %in% gsub("sub-", "", unique(downloaded_FC_ids_NKI))) & struct_ids_NKI %in% func_qc_keep_NKI$participant_id)] # none 
+length(which(unique(func_qc_keep_NKI$participant_id) %in% struct_ids_NKI)) # 1059
+struct_qc_ids_NKI = unlist(t1_qc_NKI %>% filter(qc_determination == "Pass" &session_id==1) %>% select(participant_id))
+struct_qc_ids_NKI[which(!(struct_qc_ids_NKI %in% struct_ids_NKI))] # none
+
+
+struct_ids_PNC = unlist(struct_all %>% filter(study == "PNC") %>% select(participant_id))
+length(struct_ids_PNC); length(unique(downloaded_FC_ids_PNC)); length(unique(func_qc_keep_PNC$participant_id)) # 1439 vs 1227 vs 1321
+struct_ids_PNC[(!(struct_ids_PNC %in% gsub("sub-", "", unique(downloaded_FC_ids_PNC))) & struct_ids_PNC %in% func_qc_keep_PNC$participant_id)] # none
+length(which(unique(func_qc_keep_PNC$participant_id) %in% struct_ids_PNC)) # 1227
+struct_qc_ids_PNC = unlist(t1_qc_PNC %>% filter(qc_determination == "Pass" &session_id==1) %>% select(participant_id))
+struct_qc_ids_PNC[which(!(struct_qc_ids_PNC %in% struct_ids_PNC))] # none
+
+
+```
+
+```{r}
+all_FC_files = c(FC_files_BHRC, FC_files_CCNP, FC_files_HBN, FC_files_NKI, FC_files_PNC)
+# remove duplicated subject files (should be between 4070 based on overlap of functional QC and structural IDs and 5118 based on functional QC)
+all_func_qc_keep_ids = c(unique(func_qc_keep_BHRC$participant_id), unique(func_qc_keep_CCNP$participant_id), unique(func_qc_keep_HBN$participant_id), unique(func_qc_keep_NKI$participant_id), unique(func_qc_keep_PNC$participant_id))
+all_func_struct_overlap_ids = all_func_qc_keep_ids[which(all_func_qc_keep_ids %in% sub(".*sub-([^_/]+).*", "\\1",c(all_struct_ids_BHRC, all_struct_ids_CCNP, all_struct_ids_HBN, all_struct_ids_NKI, all_struct_ids_PNC)))]
+
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+
+# all_FC_downloaded_ids[which(!(all_FC_downloaded_ids %in% all_func_qc_keep_ids))] # all BHRC extra downloaded files are either excluded by QC or not baseline session, HBN excluded by QC, NKI either excluded by QC, not baseline, or not rest. Can safely remove these subjects from the file vector to load in
+
+all_FC_files = all_FC_files[-which(!(all_FC_downloaded_ids %in% all_func_qc_keep_ids))]
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+length(unique(all_FC_downloaded_ids))
+
+
+all_FC_downloaded_ids[which(!(all_FC_downloaded_ids %in% all_func_struct_overlap_ids))] 
+
+# remove any session 2
+all_FC_files = all_FC_files[-c(grep("ses-2", all_FC_files))]
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+
+duplicated_ids = all_FC_downloaded_ids[which(duplicated(all_FC_downloaded_ids))]
+grep(duplicated_ids[1], all_FC_files, value = T)
+
+# remove higher runs when lower run available
+deduplicate_fc_by_run <- function(fc_files) {
+  #browser()
+  # Track original index
+  original_index <- seq_along(fc_files)
+
+  # Extract subject IDs and run numbers
+  subj_ids <- sub(".*(sub-[^/]+)/.*", "\\1", fc_files)
+  run_nums <- as.integer(sub(".*run-([0-9]+).*", "\\1", fc_files)) # NA for those with no run information - keep for now
+
+  # Combine into a data.frame
+  df <- data.frame(file = fc_files, subject = subj_ids, run = run_nums, index = original_index, stringsAsFactors = FALSE)
+  # Split into two groups
+  with_run <- df[!is.na(df$run), ]
+  no_run <- df[is.na(df$run), ]
+
+  # For files with run numbers, keep lowest run per subject
+  keep_with_run <- with_run[ave(with_run$run, with_run$subject, FUN = min) == with_run$run, ]
+  
+   # Combine and re-sort by original order
+  final_df <- rbind(keep_with_run, no_run)
+  final_df <- final_df[order(final_df$index), ]
+
+  return(final_df$file)
+}
+
+all_FC_files_copy = all_FC_files
+all_FC_files = deduplicate_fc_by_run(all_FC_files)
+
+```
+
+```{r}
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+
+duplicated_ids = all_FC_downloaded_ids[which(duplicated(all_FC_downloaded_ids))] # all from NKI or PNC
+grep(duplicated_ids[1], all_FC_files, value = T)
+
+# NKI has 3 acquisition protocols: singlebad (CAP) for reference, multiband 645 and multiband 1400
+func_qc_keep_NKI %>% group_by(acq) %>% summarize(mean(medianFD))
+# 645 is best temporal resolution and lowest avg median FD
+deduplicate_fc_NKI_files <- function(fc_files) {
+  #browser()
+  # Track original index
+  original_index <- seq_along(fc_files)
+
+  # Extract subject IDs, study, acq
+  subj_ids <- sub(".*(sub-[^/]+)/.*", "\\1", fc_files)
+  study_ids <- sub(".*/RBC_version0.1/([A-Z]+)_.*", "\\1", fc_files)
+  acq <- sub(".*acq-([A-Za-z0-9]+)_.*", "\\1", fc_files)
+  session_ids <-  sub(".*ses-([A-Za-z0-9]+)_.*", "\\1", fc_files)
+  
+
+  # Combine into a data.frame
+  df <- data.frame(file = fc_files, subject = subj_ids, study = study_ids, session = session_ids, acq = acq, index = original_index, stringsAsFactors = FALSE)
+  
+  # Split into NKI vs other
+  NKI <- df[df$study == "NKI", ]
+  other <- df[df$study != "NKI", ]
+
+  # For NKI, get file with most preferred acquisition (645 > 1400 > 2500) and session (BAS1 > BAS2)
+  keep_NKI <- NKI %>%
+    filter(session %in% c("BAS1", "BAS2")) %>%
+  mutate(
+    priority = case_when(
+      grepl("645", file) ~ 1,
+      grepl("1400", file) ~ 2,
+      grepl("CAP", file) ~ 3,
+      TRUE ~ 99  # lowest priority for anything else
+    )
+  ) %>%
+  group_by(subject) %>%
+  arrange(session, priority, .by_group = TRUE) %>% # keep earliest session with most preferred acq
+  slice(1) %>%
+  ungroup() %>%
+  select(-priority)
+  
+   # Combine and re-sort by original order
+  final_df <- rbind(keep_NKI, other)
+  final_df <- final_df[order(final_df$index), ]
+
+  return(final_df$file)
+}
+
+all_FC_files = deduplicate_fc_NKI_files(all_FC_files)
+```
+
+```{r}
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+duplicated_ids = all_FC_downloaded_ids[which(duplicated(all_FC_downloaded_ids))] # all fromPNC
+grep(duplicated_ids[1], all_FC_files, value = T) # different acq - can't find documentation for "100"
+
+deduplicate_fc_PNC_files <- function(fc_files) {
+  #browser()
+  # Track original index
+  original_index <- seq_along(fc_files)
+
+  # Extract subject IDs, study, acq
+  subj_ids <- sub(".*(sub-[^/]+)/.*", "\\1", fc_files)
+  study_ids <- sub(".*/RBC_version0.1/([A-Z]+)_.*", "\\1", fc_files)
+  acq <- sub(".*acq-([A-Za-z0-9]+)_.*", "\\1", fc_files)
+
+  # Combine into a data.frame
+  df <- data.frame(file = fc_files, subject = subj_ids, study = study_ids, acq = acq, index = original_index, stringsAsFactors = FALSE)
+  
+  # Split into PNC vs other
+  PNC <- df[df$study == "PNC", ]
+  other <- df[df$study != "PNC", ]
+
+  # For PNC, get file with most preferred acquisition (singleband > 100)
+  keep_PNC <- PNC %>%
+  mutate(
+    priority = case_when(
+      grepl("singleband", file) ~ 1,
+      grepl("100", file) ~ 2,
+      TRUE ~ 99  # lowest priority for anything else
+    )
+  ) %>%
+  group_by(subject) %>%
+  arrange(priority, .by_group = TRUE) %>% 
+  slice(1) %>%
+  ungroup() %>%
+  select(-priority)
+  
+   # Combine and re-sort by original order
+  final_df <- rbind(keep_PNC, other)
+  final_df <- final_df[order(final_df$index), ]
+
+  return(final_df$file)
+}
+
+all_FC_files = deduplicate_fc_PNC_files(all_FC_files)
+
+all_FC_downloaded_ids = sub(".*sub-([^_/]+).*", "\\1", all_FC_files)
+duplicated_ids = all_FC_downloaded_ids[which(duplicated(all_FC_downloaded_ids))] # no more duplicates!
+length(all_FC_downloaded_ids) #4173 total
+
+all_FC_files_to_get <- all_FC_files[!file.exists(all_FC_files)]
+saveRDS(all_FC_files_to_get, "/media/disk2/RBC_version0.1/files_to_get.rds")
+```
+
+```{r}
+# combine all demo and qc data across studies
+demo_all = rbind(demo_BHRC, demo_CCNP, demo_HBN, demo_NKI, demo_PNC)
+func_qc_keep_all = rbind(func_qc_keep_BHRC, func_qc_keep_CCNP, func_qc_keep_HBN, func_qc_keep_NKI, func_qc_keep_PNC)
+
+# regional labels
+schaefer_atlas = read_tsv("/media/disk2/RBC_version0.1/atlas-Schaefer2018_space-MNI152NLin6_res-2_desc-300Parcels17NetworksOrder_dseg.tsv")
+# remove background region
+schaefer_atlas %<>% filter(index!=0)
+region_labels = gsub("17Networks_", "", schaefer_atlas$label)
+network17_id = sub("^[^_]+_([^_]+)_.*$", "\\1", region_labels)
+# get 7 network ids
+# Create a lookup table for 17-to-7 network mapping
+yeo17_to_7 <- c("VisCent" = "Visual", "VisPeri" = "Visual",
+                "SomMotA" = "Somatomotor", "SomMotB" = "Somatomotor",
+                "DorsAttnA" = "DorsalAttn", "DorsAttnB" = "DorsalAttn",
+                "SalVentAttnA" = "VentralAttn", "SalVentAttnB" = "VentralAttn",
+                "LimbicA" = "Limbic", "LimbicB" = "Limbic",
+                "ContA" = "Control", "ContB" = "Control", "ContC" = "Control",
+                "DefaultA" = "Default", "DefaultB" = "Default", "DefaultC" = "Default", "TempPar" = "Default")
+
+# Map to 7-network labels
+network7_id <- yeo17_to_7[network17_id]
+
+region_connection_names = matrix(NA, nrow = 300, ncol = 300)
+for (i in 1:nrow(region_connection_names)){
+  region_connection_names[i, ] =  paste0(region_labels[i], "_to_", region_labels)
+}
+region_connection_names = region_connection_names[lower.tri(region_connection_names)]
+
+network17_connection_names = matrix(NA, nrow =300, ncol =300)
+for (i in 1:nrow(network17_connection_names)){
+  network17_connection_names[i, ] =  paste0(network17_id[i], "_to_", network17_id)
+}
+network17_connection_names = network17_connection_names[lower.tri(network17_connection_names)]
+# organize the regions connection names
+network17_connection_names_clean = lapply(network17_connection_names, function(x) {
+  strsplit(x, "_to_") %>% unlist %>% sort %>% paste0(collapse = "_to_")
+}) %>% unlist
+
+network7_connection_names = matrix(NA, nrow = 300, ncol = 300)
+for (i in 1:nrow(network7_connection_names)){
+  network7_connection_names[i, ] =  paste0(network7_id[i], "_to_", network7_id)
+}
+network7_connection_names = network7_connection_names[lower.tri(network7_connection_names)]
+# organize the regions connection names
+network7_connection_names_clean = lapply(network7_connection_names, function(x) {
+  strsplit(x, "_to_") %>% unlist %>% sort %>% paste0(collapse = "_to_")
+}) %>% unlist
+
+library(pbapply)
+
+FC_data <- pblapply(all_FC_files, function(f){
+  #browser()
+  # read in file
+  FC <- read_tsv(f, col_names = F, show_col_types = FALSE)
+  
+  # vector of regional connections
+  FC_regional <- FC[lower.tri(FC)]
+  names(FC_regional) <- region_connection_names
+  
+  # 7 network means
+  temp = data.frame(FC = network7_connection_names_clean, Z = FC_regional)
+  temp = temp %>% group_by(FC) %>% summarise(mean_Z = mean(Z))
+  
+  FC_7_network = temp$mean_Z
+  names(FC_7_network) = temp$FC
+  
+  # 17 network means
+  temp = data.frame(FC = network17_connection_names_clean, Z = FC_regional)
+  temp = temp %>% group_by(FC) %>% summarise(mean_Z = mean(Z))
+  
+  FC_17_network = temp$mean_Z
+  names(FC_17_network) = temp$FC
+  
+  # add in subject id demographic
+  subj = sub(".*sub-([^_/]+).*", "\\1", f)
+  # session id to match demographic
+  session_id <-  sub(".*ses-([A-Za-z0-9]+)_.*", "\\1", f)
+  demo_sub = demo_all[as.character(demo_all$participant_id) == subj & demo_all$session_id == session_id,]
+  # add in QC
+  acq <- sub(".*acq-([A-Za-z0-9]+)_.*", "\\1", f)
+  run <- sub(".*run-([0-9]+)_.*", "\\1", f)
+  qc_sub = func_qc_keep_all[as.character(func_qc_keep_all$participant_id) == subj & func_qc_keep_all$session_id == session_id & (func_qc_keep_all$acq == acq | is.na(func_qc_keep_all$acq)) & (func_qc_keep_all$run == run | is.na(func_qc_keep_all$run)),]
+  
+  if(nrow(qc_sub) > 1){
+    warning(paste0("Check ID = ", subj))
+  }
+  
+  FC_regional = cbind(demo_sub, qc_sub, t(as.data.frame(FC_regional)))
+  FC_7_network = cbind(demo_sub, qc_sub, t(as.data.frame(FC_7_network)))
+  FC_17_network = cbind(demo_sub, qc_sub, t(as.data.frame(FC_17_network)))
+  
+  return(list(FC_regional = FC_regional, FC_7_network = FC_7_network, FC_17_network = FC_17_network))
+})
+
+
+# save very large dataset before more manipulation since above code took ~45 mins to run
+saveRDS(FC_data, "/media/disk2/multivariateBWAS/RBC_sims/FC_data.rds")
+```
+
+```{r}
+# combine FC rows
+library(purrr)
+FC_regional <- map(FC_data, 1) %>% bind_rows()
+FC_network7   <- map(FC_data, 2) %>% bind_rows()
+FC_network17  <- map(FC_data, 3) %>% bind_rows()
+
+# forgot to remove the duplicate participant/session id
+FC_regional %<>% select(-c(participant_id...42, session_id...44))
+FC_regional %<>% rename(participant_id = "participant_id...1", session_id = "session_id...2")
+FC_network7 %<>% select(-c(participant_id...42, session_id...44))
+FC_network7 %<>% rename(participant_id = "participant_id...1", session_id = "session_id...2")
+FC_network17 %<>% select(-c(participant_id...42, session_id...44))
+FC_network17 %<>% rename(participant_id = "participant_id...1", session_id = "session_id...2")
+
+write.csv(FC_regional, "/media/disk2/RBC_version0.1/FC_regional_unharmonized.csv")
+write.csv(FC_network7, "/media/disk2/RBC_version0.1/FC_network7_unharmonized.csv")
+write.csv(FC_network17, "/media/disk2/RBC_version0.1/FC_network17_unharmonized.csv")
+
+# 4173 participants with FC
+# 3161 after harmonizing with covariates
+# overlap of 3074 with the 3486 structural harmonized ids
+```
+
+
+# CovBat
+
+Save versions of the data that have had site effects addressed via CovBat
+
+## Structural
+
+```{r}
+library(CovBat)
+struct_all = read.csv(paste0(RBC_path, "regional_GMV_all_sites_unharmonized.csv"))
+
+
+data_struct_schaefer_covbat = covbat(dat = t(struct_all[,grep("17Networks", colnames(struct_all), value = T)]),
+                            bat = struct_all$study_site)
+
+data_struct_DKT_covbat = covbat(dat = t(struct_all[,c(grep("lh_", colnames(struct_all), value = T), grep("rh_", colnames(struct_all), value = T))]),
+                            bat = struct_all$study_site)
+
+data_struct_harmonized = struct_all
+data_struct_harmonized[,grep("17Networks", colnames(struct_all), value = T)] = t(data_struct_schaefer_covbat$dat.covbat)
+data_struct_harmonized[,c(grep("lh_", colnames(struct_all), value = T), grep("rh_", colnames(struct_all), value = T))] = t(data_struct_DKT_covbat$dat.covbat)
+
+# save harmonized data
+write.csv(data_struct_harmonized, paste0(RBC_path,  "regional_GMV_all_sites_harmonized.csv"))
+
+
+# including covariates
+covariates = model.matrix(~ age + sex + p_factor_mcelroy_harmonized_all_samples + internalizing_mcelroy_harmonized_all_samples + externalizing_mcelroy_harmonized_all_samples + attention_mcelroy_harmonized_all_samples, struct_all)
+
+
+struct_all_cov = na.omit(struct_all[,c("participant_id","study_site", "study", "age", "sex", "internalizing_mcelroy_harmonized_all_samples", "externalizing_mcelroy_harmonized_all_samples", "p_factor_mcelroy_harmonized_all_samples", "attention_mcelroy_harmonized_all_samples", grep("17Networks", colnames(struct_all), value = T), grep("^(lh_|rh_)", colnames(struct_all), value = TRUE))])
+
+data_struct_schaefer_covbat_cov = covbat(dat = t(struct_all_cov[,grep("17Networks", colnames(struct_all_cov), value = T)]),
+                            bat = struct_all_cov$study_site, mod = covariates)
+
+data_struct_DKT_covbat_cov = covbat(dat = t(struct_all_cov[,c(grep("lh_", colnames(struct_all_cov), value = T), grep("rh_", colnames(struct_all_cov), value = T))]),
+                            bat = struct_all_cov$study_site, mod = covariates)
+
+data_struct_harmonized_cov = struct_all_cov
+data_struct_harmonized_cov[,grep("17Networks", colnames(struct_all_cov), value = T)] = t(data_struct_schaefer_covbat_cov$dat.covbat)
+data_struct_harmonized_cov[,c(grep("lh_", colnames(struct_all_cov), value = T), grep("rh_", colnames(struct_all_cov), value = T))] = t(data_struct_DKT_covbat_cov$dat.covbat)
+
+# merge back in other demographic data
+new_cols <- c("participant_id", setdiff(names(struct_all), names(data_struct_harmonized_cov)))
+struct_all_subset <- struct_all[, new_cols]
+data_struct_harmonized_cov = merge(data_struct_harmonized_cov, struct_all_subset, by = "participant_id")
+
+# save harmonized data
+write.csv(data_struct_harmonized_cov, paste0(RBC_path,  "regional_GMV_all_sites_harmonized_covariates.csv"))
+
+
+
+
+```
+
+## Functional
+
+```{r}
+## regional
+FC_regional = read.csv(paste0(RBC_path, "FC_regional_unharmonized.csv"))
+
+
+FC_regional_covbat = covbat(dat = t(FC_regional[,grep("_to_", colnames(FC_regional), value = T)]),
+                            bat = FC_regional$study_site)
+
+
+FC_regional_harmonized = FC_regional
+FC_regional_harmonized[,grep("_to_", colnames(FC_regional), value = T)] = t(FC_regional_covbat$dat.covbat)
+
+# save harmonized data
+write.csv(FC_regional_harmonized, paste0(RBC_path,  "FC_regional_harmonized.csv"))
+
+# including covariates
+covariates = model.matrix(~ age + sex + p_factor_mcelroy_harmonized_all_samples + internalizing_mcelroy_harmonized_all_samples + externalizing_mcelroy_harmonized_all_samples + attention_mcelroy_harmonized_all_samples, FC_regional)
+
+
+FC_regional_cov = na.omit(FC_regional[,c("participant_id","study_site", "study", "age", "sex", "internalizing_mcelroy_harmonized_all_samples", "externalizing_mcelroy_harmonized_all_samples", "p_factor_mcelroy_harmonized_all_samples", "attention_mcelroy_harmonized_all_samples", grep("_to_", colnames(FC_regional), value = T))])
+
+FC_regional_covbat_cov = covbat(dat = t(FC_regional_cov[,grep("_to_", colnames(FC_regional_cov), value = T)]),
+                            bat = FC_regional_cov$study_site, mod = covariates)
+
+FC_regional_harmonized_cov = FC_regional_cov
+FC_regional_harmonized_cov[,grep("_to_", colnames(FC_regional_cov), value = T)] = t(FC_regional_covbat_cov$dat.covbat)
+
+# merge back in other demographic data
+new_cols <- c("participant_id", setdiff(names(FC_regional), names(FC_regional_harmonized_cov)))
+FC_regional_subset <- FC_regional[, new_cols]
+FC_regional_harmonized_cov = merge(FC_regional_harmonized_cov, FC_regional_subset, by = "participant_id")
+
+# save harmonized data
+write.csv(FC_regional_harmonized_cov, paste0(RBC_path,  "FC_regional_harmonized_covariates.csv"))
+
+
+## 7 Network
+FC_network7 = read.csv(paste0(RBC_path, "FC_network7_unharmonized.csv"))
+
+
+FC_network7_covbat = covbat(dat = t(FC_network7[,grep("_to_", colnames(FC_network7), value = T)]),
+                            bat = FC_network7$study_site)
+
+
+FC_network7_harmonized = FC_network7
+FC_network7_harmonized[,grep("_to_", colnames(FC_network7), value = T)] = t(FC_network7_covbat$dat.covbat)
+
+# save harmonized data
+write.csv(FC_network7_harmonized, paste0(RBC_path,  "FC_network7_harmonized.csv"))
+
+# including covariates
+covariates = model.matrix(~ age + sex + p_factor_mcelroy_harmonized_all_samples + internalizing_mcelroy_harmonized_all_samples + externalizing_mcelroy_harmonized_all_samples + attention_mcelroy_harmonized_all_samples, FC_network7)
+
+
+FC_network7_cov = na.omit(FC_network7[,c("participant_id","study_site", "study", "age", "sex", "internalizing_mcelroy_harmonized_all_samples", "externalizing_mcelroy_harmonized_all_samples", "p_factor_mcelroy_harmonized_all_samples", "attention_mcelroy_harmonized_all_samples", grep("_to_", colnames(FC_network7), value = T))])
+
+FC_network7_covbat_cov = covbat(dat = t(FC_network7_cov[,grep("_to_", colnames(FC_network7_cov), value = T)]),
+                            bat = FC_network7_cov$study_site, mod = covariates)
+
+FC_network7_harmonized_cov = FC_network7_cov
+FC_network7_harmonized_cov[,grep("_to_", colnames(FC_network7_cov), value = T)] = t(FC_network7_covbat_cov$dat.covbat)
+
+# merge back in other demographic data
+new_cols <- c("participant_id", setdiff(names(FC_network7), names(FC_network7_harmonized_cov)))
+FC_network7_subset <- FC_network7[, new_cols]
+FC_network7_harmonized_cov = merge(FC_network7_harmonized_cov, FC_network7_subset, by = "participant_id")
+
+# save harmonized data
+write.csv(FC_network7_harmonized_cov, paste0(RBC_path,  "FC_network7_harmonized_covariates.csv"))
+
+## 17 network
+FC_network17 = read.csv(paste0(RBC_path, "FC_network17_unharmonized.csv"))
+
+
+FC_network17_covbat = covbat(dat = t(FC_network17[,grep("_to_", colnames(FC_network17), value = T)]),
+                            bat = FC_network17$study_site)
+
+
+FC_network17_harmonized = FC_network17
+FC_network17_harmonized[,grep("_to_", colnames(FC_network17), value = T)] = t(FC_network17_covbat$dat.covbat)
+
+# save harmonized data
+write.csv(FC_network17_harmonized, paste0(RBC_path,  "FC_network17_harmonized.csv"))
+
+# including covariates
+covariates = model.matrix(~ age + sex + p_factor_mcelroy_harmonized_all_samples + internalizing_mcelroy_harmonized_all_samples + externalizing_mcelroy_harmonized_all_samples + attention_mcelroy_harmonized_all_samples, FC_network17)
+
+
+FC_network17_cov = na.omit(FC_network17[,c("participant_id","study_site", "study", "age", "sex", "internalizing_mcelroy_harmonized_all_samples", "externalizing_mcelroy_harmonized_all_samples", "p_factor_mcelroy_harmonized_all_samples", "attention_mcelroy_harmonized_all_samples", grep("_to_", colnames(FC_network17), value = T))])
+
+FC_network17_covbat_cov = covbat(dat = t(FC_network17_cov[,grep("_to_", colnames(FC_network17_cov), value = T)]),
+                            bat = FC_network17_cov$study_site, mod = covariates)
+
+FC_network17_harmonized_cov = FC_network17_cov
+FC_network17_harmonized_cov[,grep("_to_", colnames(FC_network17_cov), value = T)] = t(FC_network17_covbat_cov$dat.covbat)
+
+# merge back in other demographic data
+new_cols <- c("participant_id", setdiff(names(FC_network17), names(FC_network17_harmonized_cov)))
+FC_network17_subset <- FC_network17[, new_cols]
+FC_network17_harmonized_cov = merge(FC_network17_harmonized_cov, FC_network17_subset, by = "participant_id")
+
+# save harmonized data
+write.csv(FC_network17_harmonized_cov, paste0(RBC_path,  "FC_network17_harmonized_covariates.csv"))
+
+
+
+```

@@ -1,0 +1,210 @@
+---
+title: "RBC Random Forest-Random Forest Simulations (Structural)"
+author: "Megan Jones"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: spacelab
+    highlight: haddock
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, eval = TRUE)
+```
+
+These simulations are for part of Figure 2.
+
+In this simulation, $\xi$ is equal to $\mu$, leading to 3 parameters.
+
+$\xi$ and $\mu$ are cross-validated ridge regression.
+
+We compare 4 ground truth values for "rho_true" (0.1, 0.25, 0.5, 0.75) across a range of sample sizes with 500 simulations.
+
+# Set up
+
+```{r, eval=T}
+# load libraries, data, and functions
+source("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/sim_setup_roi_RBC.R")
+library(ranger)
+library(tuneRanger)
+library(mlr)
+library(dplyr)
+
+
+
+rhos <- c(.10, .25, .50, .75)
+rhos <-  c(0.25, 0.1, 0.5, 0.75) # so I can look at 0.25 when it finishes
+ns <- c(100, 200, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7500, 10000, 20000)
+
+# set number of simulations
+nsim = 500
+
+RNGkind("L'Ecuyer-CMRG") # for reproducibility with pbmcy
+seed_table = data.frame(build = c(123, 435, 300, 789, 900), sim = c(029, 866, 999, 013, 456))
+```
+
+
+```{r}
+# function to take phenotype, rho_true, seed index, arguments for sim function
+perform_sim = function(pheno, rho_true, seed_ind, ncores, results_path, ...){
+  #browser()
+  
+  # build model
+  # cross-validated ridge regression
+  keep_inds = which(!(is.na(build[,pheno])))
+  
+  # try tuning at each of the sample sizes and apply to each
+  # Combine predictors and outcome into one data.frame
+  df = data.frame(build[keep_inds,"img"])
+  df$pheno = build[keep_inds,pheno]
+
+  # Create the regression task
+  task = makeRegrTask(id = "rf_task", data = df, target = "pheno")
+  rfTune = tuneRanger(task, num.trees = 250, iters = 25, iters.warmup = 10) # tune build model
+  # save build parameters
+  saveRDS(rfTune$recommended.pars, paste0(results_path, "rho_", rho_true*100,"/build_params.rds"))
+  
+  eval$fakeYMean = predict(rfTune$model, newdata = data.frame(eval$img))$data$response
+  
+
+  # # get oob residuals that will be the error distribution for the eval data (outdated, now using a uniform distribution)
+  res = as.vector(build[keep_inds, pheno] -  predict(rfTune$model, newdata = data.frame(build[keep_inds,"img"]))$data$response) 
+ 
+  # save fakeYMean
+  saveRDS(eval$fakeYMean, paste0(results_path, "rho_", rho_true*100,"/fakeYMean.rds"))
+  
+  # variance of xi is the same across sims, just changing the variance of Y via the error
+  v_xi = var(eval$fakeYMean)
+  
+  # set target rho_true and get smooth distribution of the residuals
+  ls_res = logspline_targetrho(res, eval$fakeYMean, rho_true) 
+  
+  # save error distribution
+  saveRDS(ls_res, paste0(results_path, "rho_", rho_true*100, "/ls_res.rds"))
+  
+  # get properties of the error distribution
+  rho_res = get_rho_ls(eval$fakeYMean, ls_res)
+  
+  #eval$mu = eval$fakeYMean
+
+  
+  # for rho_2, fit a model outside of the simulations
+ eval_train$fakeYMean = predict(rfTune$model, newdata = data.frame(eval_train$img))$data$response
+  eval_test$fakeYMean = predict(rfTune$model, newdata = data.frame(eval_test$img))$data$response
+  
+  # replace logspline error with uniform error # need to redo for ridge if wanted xx
+  # eval_train$fakeY = eval_train$fakeYMean + rlogspline(nrow(eval_train), ls_res) - rho_res$mean_res
+  eval_train$fakeY = eval_train$fakeYMean + runif_target(nrow(eval_train), rho_true, var(eval$fakeYMean))
+  muhat_tr_mod = ranger(x = eval_train$img, y = eval_train$fakeY, num.threads = 3)
+  
+  # for reproducibility using pbmclapply
+  set.seed(seed_table$sim[seed_ind])
+  mc.reset.stream()
+  
+  # perform sims
+  sim_IF_3param(dt = eval, model_func = helper_ranger, xi_name = "fakeYMean", ls_dist = ls_res, res_mean = rho_res$mean_res,
+         res_var = rho_res$v_res, rho_2_test_dat = eval_test, ns = ns, nsim = nsim, K = 5, xname = "img",
+         yname = "fakeY", model_args = list(num.threads = 1), types = all_types,
+         cf_method = c("instant", "hold"),
+         save_path = paste0(results_path, "rho_", rho_true*100, "/n"), ncores = ncores, muhat_tr_mod = muhat_tr_mod, rho_true = rho_true)
+}
+
+```
+
+```{r}
+# tuning function
+helper_ranger = function(x,y, ...){
+  df = data.frame(x)
+  df$y = y
+  task <- makeRegrTask(id = paste0("rf"), data = df, target = "y")
+  tuned <- tuneRanger(task,num.trees = 250, num.threads = 1, iters = 25, iters.warmup = 10, show.info = F)
+  
+  # check for constant predictions
+  # first check recommended parameters
+  if(sd(predict( tuned$model, newdata = data.frame(x))$data$response) > 1e-5){
+    return( tuned$model)
+  } else{
+    # check for lowest error combination that does not produce all constant
+    tune_table <- tuned$results[order(tuned$results$mse), ]
+    for (i in 1:nrow(tune_table)) {
+      params <- tune_table[i, ]
+      
+      mod <- ranger(
+        x = x,
+        y = y,
+        mtry = params$mtry,
+        min.node.size = params$min.node.size,
+        sample.fraction = params$sample.fraction,
+        num.trees = 250
+      )
+      
+      if (sd(predict(mod, x)$predictions) > 1e-5) {
+        #print(params)
+        return(mod)
+      } 
+    }
+  }
+
+}
+
+```
+
+
+# Build
+
+```{r, eval=T}
+seed_ind = 2
+results_path_root = "/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/"
+# phenotypes to predict
+#phenotypes = c("p_factor","age", "internal", "external")
+phenotypes = c("age")
+for(pheno in phenotypes){
+  # set path for results
+  results_path = paste0(results_path_root, pheno, "/")
+  # create results subfolders if needed
+  check_dirs(results_path, rhos, ns)
+}
+
+# save seed and atlas information
+saveRDS(seed_ind, paste0(results_path_root, "seed_ind.rds"))
+saveRDS(colnames(dat$img), paste0(results_path_root, "atlas.rds"))
+set.seed(seed_table$build[seed_ind]) 
+
+dat_split = split_model(dat)
+build = dat_split$d1
+eval = dat_split$d2
+
+rm(dat)
+rm(dat_split)
+
+# for rho_2, cor_n(muhat_tr(X_te), Y_te | muhat_tr), need to define a model to apply as given
+# split so that the training model uses 500 people
+eval_split = split_model(eval, prop=(nrow(eval)-500)/(nrow(eval)))
+eval_train = eval_split$d2
+eval_test = eval_split$d1
+rm(eval_split)
+```
+
+# Simulations
+
+
+
+```{r}
+#for (phen in c("p_factor", "age", "internal", "external")){
+for(phen in "age"){
+  for (rho in rhos){
+    perform_sim(phen, rho, seed_ind, ncores = 20, results_path = paste0(results_path_root, phen, "/"))
+  }
+}
+
+
+```
+
+
+```{r, eval=F}
+knitr::purl("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/ROI_rfximu.Rmd")
+```
