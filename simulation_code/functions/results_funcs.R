@@ -235,6 +235,80 @@ get_if_res_rho_2 = function(res, ns){
   return(allResults)
 }
 
+# get coverage probability for plotting
+get_cp <- function(data, types, rho) {
+  # Check inputs
+  stopifnot(is.data.frame(data))
+  stopifnot(is.character(types) && length(types) > 0)
+  stopifnot(is.numeric(rho))
+  if (!"n" %in% names(data)) stop("Column 'n' (sample size) must exist in the data.")
+  
+  # Extract unique sample sizes
+  unique_n <- sort(unique(data$n))
+  
+  # Handle scalar rho: Expand it to match all unique 'n'
+  if (length(rho) == 1) {
+    rho_lookup <- setNames(rep(rho, length(unique_n)), unique_n)
+  } else if (length(rho) == length(unique_n)) {
+    # Handle vector rho: Create lookup table for unique 'n'
+    rho_lookup <- setNames(rho, unique_n)
+  } else {
+    stop("The length of 'rho' must be 1 (scalar) or equal to the number of unique values in 'n'.")
+  }
+  
+  # Initialize an empty list to store results
+  cp_list <- list()
+  
+  # Loop over each type and compute coverage probability
+  for (type in types) {
+    # Use regex to match columns for lower and upper bounds: "lCI_" and "uCI_"
+    lower_cols <- grep(paste0("^lCI_", type, "_"), names(data), value = TRUE)
+    upper_cols <- gsub("^lCI_", "uCI_", lower_cols)  # Infer upper columns dynamically
+    
+    # If no columns found for the type, issue a warning
+    if (length(lower_cols) == 0) {
+      warning(paste("No confidence interval columns found for type:", type))
+      next
+    }
+    
+    # Compute coverage for each confidence interval type under the current estimator type
+    for (i in seq_along(lower_cols)) {
+      lower_col <- lower_cols[i]
+      upper_col <- upper_cols[i]
+      
+      # Verify that the corresponding upper column exists
+      if (!(upper_col %in% names(data))) {
+        warning(paste("Upper column", upper_col, "not found. Skipping", lower_col))
+        next
+      }
+      
+      # Map rho to rows based on the 'n' column
+      rho_values <- rho_lookup[as.character(data$n)]
+      
+      # Check if rho is within the interval [lower, upper]
+      coverage <- (data[[lower_col]] <= rho_values) & (data[[upper_col]] >= rho_values)
+      
+      # Store coverage probability as a data.frame
+      cp_list[[paste0("cp_", type, "_", sub(paste0("^lCI_", type, "_"), "", lower_col))]] <- data.frame(
+        n = data$n,
+        est = type,
+        ci = sub(paste0("^lCI_", type, "_"), "", lower_col),
+        coverage = coverage
+      )
+    }
+  }
+  
+  # Combine all results into a single data.frame
+  cp_combined <- do.call(rbind, cp_list)
+  
+  # Calculate the mean coverage probability grouped by n, estimator, and confidence interval type
+  coverage_prob_by_n <- cp_combined %>%
+    group_by(n, est, ci) %>%
+    summarise(coverage_probability = mean(coverage, na.rm = TRUE), .groups = "drop")
+  
+  return(coverage_prob_by_n)
+}
+
 
 ## Construct tables of bias and coverage
 # point estimates
