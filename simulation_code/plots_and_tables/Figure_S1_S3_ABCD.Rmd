@@ -19,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
 ```
 
 
-# Set up
+# Figure S1
 
 
 ```{r,  fig.height=16, fig.width=22}
@@ -78,12 +78,24 @@ allResults_50_ABCD <- fix_quantile(allResults_50_ABCD, types = c("pq", "pf", "pm
 allResults_75_ABCD <- fix_quantile(allResults_75_ABCD, types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
 
 # compare transformations (figure S1)
-plot_panel_trans(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+p = plot_panel_trans(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+
+p
+
+# save for journal submission
+ggsave("FigS1.pdf", p, width = 22, height = 16, device = cairo_pdf)
 ```
+
+# Figure S3
 
 ```{r,  fig.height=8, fig.width=22}
 # compare instant and hold (figure S3)
-plot_panel_inst_hold(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+p = plot_panel_inst_hold(c("ABCD"), dt_labels = c("ABCD"), types = c("pq", "pf", "pm", "pl", "sf", "sm", "sl", "sq"))
+
+p
+
+# save for journal submission
+ggsave("FigS3.pdf", p, width = 22, height = 8, device = cairo_pdf)
 ```
 
 

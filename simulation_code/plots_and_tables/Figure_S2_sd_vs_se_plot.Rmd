@@ -17,6 +17,11 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
 ```
 
 ```{r}
+# load libraries, data, and functions
+source("/media/disk2/multivariateBWAS/paper_code/simulation_code/RBC/sim_setup_roi_RBC.R")
+ns = c(100, 200, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7500, 10000, 20000)
+nsim = 500
+
 ## load in allResults tables from settings to summarize
 allResults_10_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_10.csv"))
 allResults_25_ridge_age = truncate_cols(read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif/age/allResults_25.csv"))
@@ -150,10 +155,10 @@ plot_SE_SD_panel <- function(dt_suffixes, dt_labels, ...) {
     p + theme(
       legend.position = "none",
       axis.title.x = element_blank(),
-      axis.title.y = if (!is_left_col) element_blank() else element_text(size = 28),
+      axis.title.y = if (!is_left_col) element_blank() else element_text(size = 22),
       axis.text.x = element_text(size = 18),
       axis.text.y = element_text(size = 18),
-      plot.title = element_text(size = 30)
+      plot.title = element_text(size = 24)
     )
   })
   
@@ -174,6 +179,10 @@ plot_SE_SD_panel <- function(dt_suffixes, dt_labels, ...) {
   return(final_plot)
 }
 
-plot_SE_SD_panel(c("ridge_age", "rf_age"), c("Ridge", "Random Forest"), lims = c(0, 0.12))
+p = plot_SE_SD_panel(c("ridge_age", "rf_age"), c("Ridge", "Random Forest"), lims = c(0, 0.13))
 
+p
+
+# save for journal submission
+ggsave("FigS2.pdf", p, width = 14, height = 7, device = cairo_pdf)
 ```

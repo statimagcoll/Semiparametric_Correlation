@@ -194,6 +194,9 @@ p = fig1 / fig_1_legend + plot_layout(widths = c(1, 1), heights=c(1,0.1))
 
 ```{r, fig.height=8, fig.width=12}
 p
+
+# save for journal submission
+ggsave("Fig1.pdf", p, width = 12, height = 8, device = cairo_pdf)
 ```
 
 # Figure 2
@@ -217,7 +220,12 @@ allResults_50_rf_age = truncate_cols(allResults_50_rf_age, num_end_cols = 1)
 allResults_75_rf_age = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/rf_test_tune_cf_faster/age/allResults_75.csv")
 allResults_75_rf_age = truncate_cols(allResults_75_rf_age, num_end_cols = 1)
 
-plot_panel_mult_full(c("ridge_age", "rf_age"), dt_labels = c("Ridge", "Random Forest"), type = "pq", cf = "inst", source_name = "ML Model:")
+p = plot_panel_mult_full(c("ridge_age", "rf_age"), dt_labels = c("Ridge", "Random Forest"), type = "pq", cf = "inst", source_name = "ML Model:")
+
+p
+
+# save for journal submission
+ggsave("Fig2.pdf", p, width = 22, height = 14, device = cairo_pdf)
 ```
 
 # Figure 3
@@ -241,7 +249,12 @@ allResults_50_FC_17_rf = truncate_cols(allResults_50_FC_17_rf)
 allResults_75_FC_17_rf = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/rf_17network/age/allResults_75.csv")
 allResults_75_FC_17_rf = truncate_cols(allResults_75_FC_17_rf)
 
-plot_panel_mult_full(c("FC_7_rf", "FC_17_rf"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+p = plot_panel_mult_full(c("FC_7_rf", "FC_17_rf"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+
+p
+
+# save for journal submission
+ggsave("Fig3.pdf", p, width = 22, height = 14, device = cairo_pdf)
 ```
 
 # Figure S4
@@ -265,7 +278,12 @@ allResults_50_FC_17_ridge = truncate_cols(allResults_50_FC_17_ridge)
 allResults_75_FC_17_ridge = read.csv("/media/disk2/multivariateBWAS/RBC_sims/FC_sims/results/ridge_build_cov_unif_17network/age/allResults_75.csv")
 allResults_75_FC_17_ridge = truncate_cols(allResults_75_FC_17_ridge)
 
-plot_panel_mult_full(c("FC_7_ridge", "FC_17_ridge"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+p = plot_panel_mult_full(c("FC_7_ridge", "FC_17_ridge"), dt_labels = c("7 network (p=28)", "17 network (p=153)"), source_name = "Data Dimensionality:")
+
+p
+
+# save for journal submission
+ggsave("FigS4.pdf", p, width = 22, height = 14, device = cairo_pdf)
 ```
 
 # Figure S5
@@ -289,7 +307,12 @@ allResults_50_schaefer_pfactor = truncate_cols(allResults_50_schaefer_pfactor)
 allResults_75_schaefer_pfactor = read.csv("/media/disk2/multivariateBWAS/RBC_sims/ROI_sims/results/ridge_build_cov_unif_schaefer/p_factor/allResults_75.csv")
 allResults_75_schaefer_pfactor = truncate_cols(allResults_75_schaefer_pfactor)
 
-plot_panel_mult_full(c("DKT_pfactor", "schaefer_pfactor"), dt_labels = c("DKT", "Schaefer 300"), type = "pq", cf = "inst", source_name = "Atlas:")
+p = plot_panel_mult_full(c("DKT_pfactor", "schaefer_pfactor"), dt_labels = c("DKT", "Schaefer 300"), type = "pq", cf = "inst", source_name = "Atlas:")
+
+p 
+
+# save for journal submission
+ggsave("FigS5.pdf", p, width = 22, height = 14, device = cairo_pdf)
 ```
 
 

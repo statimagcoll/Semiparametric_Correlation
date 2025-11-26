@@ -11,8 +11,6 @@ output:
     highlight: haddock
 ---
 
-This performs the ridge regression analysis for the full RBC dataset (Figures 4, 5, S6).
-
 # Loading in Libraries
 
 ```{r, message = FALSE, warning = FALSE}
@@ -894,11 +892,23 @@ makeGraph <- function(graph1, graph2){
   )
   
   # Extracting the legend
-  shared_legend <- get_legend(graph1 + theme(legend.position = "right", 
-                                             legend.justification = "center",
-                                             legend.title = element_text(size = 14),
-                                             legend.text  = element_text(size = 12)))
-  
+  shared_legend <- get_legend(
+    graph1 +
+      guides(color = guide_legend(
+        override.aes = list(
+          shape = NA,      # no symbols
+          linetype = 1,    # solid line
+          size = 1.5       # thicker line for visibility
+        )
+      )) +
+      theme(
+        legend.position = "right",
+        legend.justification = "center",
+        legend.title = element_text(size = 14),
+        legend.text  = element_text(size = 12)
+      )
+  )
+    
   # Remove legends from plots
   graph1_nolegend <- graph1 + theme(legend.position = "none")
   graph2_nolegend <- graph2 + theme(legend.position = "none")
@@ -919,42 +929,66 @@ makeGraph <- function(graph1, graph2){
 ## RBC Correlation Graph
 ```{r}
 # Reading in graphs for total analysis
-RBCTot100 <- readRDS("RBC_RR_results_100.rds")
-RFTot100 <- readRDS("RBC_RF_results_100.rds")
+RBCTot100 <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RR_results_100.rds")
+RFTot100 <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_100.rds")
+
+# Turning RF graph to have triangles
+RFTot100$layers[[1]] <- NULL
+RFTot100 <- RFTot100 + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Setting y limits
 RBCTot100 <- RBCTot100 + ylim(-0.1, 0.9)
 RFTot100 <- RFTot100 + ylim(-0.1, 0.9)
 
 # Running the function
-final_fig <- makeGraph(RFTot100, RBCTot100)
+final_fig <- makeGraph(RBCTot100, RFTot100)
 final_fig
 
 ggsave("RBC_correlation_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
+
+# save pdf for journal submission
+ggsave("Fig4.pdf", final_fig, width = 10, height = 8, device = cairo_pdf)
 ```
 
 ## RBC Difference Graph
 ```{r}
 # Reading in graphs for total analysis
-RBCTot100_Diff <- readRDS("RBC_RR_results_diff_100.rds")
-RFTot100_Diff <- readRDS("RBC_RF_results_diff_100.rds")
+RBCTot100_Diff <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RR_results_diff_100.rds")
+RFTot100_Diff <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_diff_100.rds")
+
+# Turning RF graph to have triangles
+RFTot100_Diff$layers[[1]] <- NULL
+RFTot100_Diff <- RFTot100_Diff + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Setting y limits
 RBCTot100_Diff <- RBCTot100_Diff + ylim(-0.22, 0.55)
 RFTot100_Diff <- RFTot100_Diff + ylim(-0.22, 0.55)
 
 # Running the function
-final_fig <- makeGraph(RFTot100_Diff, RBCTot100_Diff)
+final_fig <- makeGraph(RBCTot100_Diff, RFTot100_Diff)
 final_fig
 
 ggsave("RBC_difference_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
+
+# save pdf for journal submission
+ggsave("Fig5.pdf", final_fig, width = 10, height = 8, device = cairo_pdf)
 ```
 
 ## RBC Ratio Graph
 ```{r}
 # Reading in graphs for total analysis
-RBCTot100_Ratio <- readRDS("RBC_RR_results_ratio_100.rds")
-RFTot100_Ratio <- readRDS("RBC_RF_results_ratio_100.rds")
+RBCTot100_Ratio <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RR_results_ratio_100.rds")
+RFTot100_Ratio <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/RBC_RF_results_ratio_100.rds")
+
+# Turning RF graph to have triangles
+RFTot100_Ratio$layers[[1]] <- NULL
+RFTot100_Ratio <- RFTot100_Ratio + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Log Scaling the graphs
 RBCTot100_Ratio <- RBCTot100_Ratio + scale_y_log10()
@@ -965,51 +999,83 @@ RBCTot100_Ratio <- RBCTot100_Ratio + ylim(1e-06, 2e+01)
 RFTot100_Ratio <- RFTot100_Ratio + ylim(1e-06, 2e+01)
 
 # Running the function
-final_fig <- makeGraph(RFTot100_Ratio, RBCTot100_Ratio)
+final_fig <- makeGraph(RBCTot100_Ratio, RFTot100_Ratio)
 final_fig
 
 ggsave("RBC_ratio_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
+
+# save pdf for journal submission
+ggsave("FigS6.pdf", final_fig, width = 10, height = 8, device = cairo_pdf)
 ```
 
 ## HBN Correlation Graph
 ```{r}
 # Reading in graphs for total analysis
-RRHBN250 <- readRDS("HBN_RR_results_250.rds")
-RFHBN250 <- readRDS("HBN_RF_results_250.rds")
+RRHBN250 <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RR_results_250.rds")
+RFHBN250 <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RF_results_250.rds")
+
+# Turning RF graph to have triangles
+RFHBN250$layers[[1]] <- NULL
+RFHBN250 <- RFHBN250 + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Setting y limits
 RRHBN250 <- RRHBN250 + ylim(-0.2, 1.0)
 RFHBN250 <- RFHBN250 + ylim(-0.2, 1.0)
 
 # Running the function
-final_fig <- makeGraph(RFHBN250, RRHBN250)
+final_fig <- makeGraph(RRHBN250, RFHBN250)
 final_fig
 
 ggsave("HBN_correlation_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
+
+# save pdf for journal submission
+ggsave("FigS7.pdf", final_fig, width = 10, height = 8, device = cairo_pdf)
 ```
 
 ## HBN Difference Graph
 ```{r}
 # Reading in graphs for total analysis
-RRHBN250_diff <- readRDS("HBN_RR_results_diff_250.rds")
-RFHBN250_diff <- readRDS("HBN_RF_results_diff_250.rds")
+RRHBN250_diff <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RR_results_diff_250.rds")
+RFHBN250_diff <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RF_results_diff_250.rds")
+
+# Turning RF graph to have triangles
+RFHBN250_diff$layers[[1]] <- NULL
+RFHBN250_diff <- RFHBN250_diff + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Setting y limits
-RRHBN250_diff <- RRHBN250_diff + ylim(-2, 2.0)
-RFHBN250_diff <- RFHBN250_diff + ylim(-2, 2.0)
+df <- RRHBN250_diff$data
+df_trunc <- df %>%
+  mutate(lCI_diff = pmax(lCI_diff, -1),
+         uCI_diff = pmin(uCI_diff,  1))
+RRHBN250_diff <- RRHBN250_diff %+% df_trunc # rebuild ggplot
+RRHBN250_diff <- RRHBN250_diff  + ylim(-1, 1.0)
+RFHBN250_diff <- RFHBN250_diff + ylim(-1, 1.0)
 
 # Running the function
-final_fig <- makeGraph(RFHBN250_diff, RRHBN250_diff)
+final_fig <- makeGraph(RRHBN250_diff, RFHBN250_diff)
 final_fig
 
 ggsave("HBN_difference_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
+
+# save pdf for journal submission
+ggsave("FigS8.pdf", final_fig, width = 10, height = 8, device = cairo_pdf)
 ```
 
 ## HBN Ratio Graph
 ```{r}
 # Reading in graphs for total analysis
-RRHBN250_ratio <- readRDS("HBN_RR_results_ratio_250.rds")
-RFHBN250_ratio <- readRDS("HBN_RF_results_ratio_250.rds")
+RRHBN250_ratio <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RR_results_ratio_250.rds")
+RFHBN250_ratio <- readRDS("/media/disk2/multivariateBWAS/ishaan_bwas/HBN_RF_results_ratio_250.rds")
+
+# Turning RF graph to have triangles
+RFHBN250_ratio$layers[[1]] <- NULL
+RFHBN250_ratio <- RFHBN250_ratio + geom_point(position = position_dodge(width = 0.5), 
+             size = 3, 
+             shape = 17)
 
 # Log Scaling the graphs
 RRHBN250_ratio <- RRHBN250_ratio + scale_y_log10()
@@ -1020,7 +1086,7 @@ RFHBN250_ratio <- RFHBN250_ratio + scale_y_log10()
 # RFHBN250_ratio <- RFHBN250_ratio + ylim(-2, 2.0)
 
 # Running the function
-final_fig <- makeGraph(RFHBN250_ratio, RRHBN250_ratio)
+final_fig <- makeGraph(RRHBN250_ratio, RFHBN250_ratio)
 final_fig
 
 ggsave("HBN_ratio_comparison.png", final_fig, width = 10, height = 8, dpi = 300, bg = "white")
