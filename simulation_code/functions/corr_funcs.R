@@ -495,16 +495,6 @@ cf_corr_if.default = function(model, dt, K, form = NULL, yname = NULL, xname = N
     }
     
     # build the reference model for this split
-    if(!identical(model_func, ranger)){
-      ref_model = do.call(model_func, model_args)
-    } else{
-      df = data.frame(y = model_args$y, x = model_args$x)
-
-      task = makeRegrTask(id = "rf_task", data = df, target = "y")
-
-      ref_model = tuneRanger(task)$model
-    }
-    
     ref_model = do.call(model_func, model_args)
     
     # predict on this split

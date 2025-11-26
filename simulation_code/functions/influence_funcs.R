@@ -153,32 +153,11 @@ logit_sq_pe = function(muhat, y, plug_in, if_emp){
   sqrt(expit(logit(plug_in^2) + mean(if_emp)))
 }
 
-# logit point estimate and confidence interval
-logit_ci = function(muhat, y, plug_in, if_emp, cl = 0.975){
-  pe = logit_pe(muhat, y, plug_in, if_emp)
-  bounds = expit(logit(pe) + c(1, -1)*qnorm(cl)*sqrt(var(if_emp)/length(muhat)))
-  return(lCI = bounds[1], pe = pe, uCI = bounds[2])
-}
-
-# squared logit point estimate and confidence interval
-logit_sq_ci = function(muhat, y, plug_in, if_emp, cl = 0.975){
-  pe = logit_sq_pe(muhat, y, plug_in, if_emp)
-  bounds = sqrt(expit(logit(pe^2) + c(1, -1)*qnorm(cl)*sqrt(var(if_emp)/length(muhat))))
-  return(lCI = bounds[1], pe = pe, uCI = bounds[2])
-}
-
 # fisher transformed estimator (given plug in value and IF vector)
 fisher_pe = function(muhat, y, plug_in, if_emp){
   if(plug_in < -1) plug_in = -1
   if(plug_in > 1) plug_in = 1
   tanh(atanh(plug_in) + mean(if_emp))
-}
-
-# fisher transformed point estimate and confidence interval
-fisher_ci = function(muhat, y, plug_in, if_emp, cl = 0.975){
-  pe = fisher_pe(muhat, y, plug_in, if_emp)
-  bounds = tanh(atanh(pe) + c(1, -1)*qnorm(cl)*sqrt(var(if_emp)/length(muhat)))
-  return(lCI = bounds[1], pe = pe, uCI = bounds[2])
 }
 
 # estimating equation estimator (CT) based on sqrt(1-theta) and IF of theta

@@ -58,11 +58,49 @@ int_ffourth = function(x, dist){
   x^4*dlogspline(x, dist)
 }
 
+# Error distributions
 runif_target = function(n, rho_true, v_xi){
   runif(n, min = -sqrt(3*(1/rho_true^2 - 1)*v_xi), max = sqrt(3*(1/rho_true^2 - 1)*v_xi))
 }
 
+v_uniform <- function(rho_true, v_xi){
+  1/12 * (2*sqrt(3*(1/rho_true^2 - 1)*v_xi))^2
+}
 
+
+# function to get correlation for ridge regression
+# The limit is the OLS fit
+cor_mu = function(X, xi, lambda, v_res, intercept = T){
+  #browser()
+  
+  # add intercept 
+  if(intercept){
+    X = cbind(1, X)
+  }
+  
+  XtX = t(X) %*% X
+  XtX_linv = solve(XtX + diag(lambda, nrow = ncol(X)))
+  H =  X %*% XtX_linv %*% t(X)
+  
+  mu = H %*% (as.matrix(xi))
+  rho_0 = (mean(xi*mu)-mean(xi)*mean(mu))/sqrt((var(xi)+v_res)*var(mu))
+  
+  # correlations
+  c(cor_mu_xi = cor(mu, xi), cor_mu_Y = rho_0, lambda = lambda)
+}
+
+# to get mu values in the population
+get_mu = function(X, xi, lambda, intercept = T){
+  if(intercept){
+    X = cbind(1, X)
+  }
+  XtX = t(X) %*% X
+  XtX_linv = solve(XtX + diag(lambda, nrow = ncol(X)))
+  H =  X %*% XtX_linv %*% t(X)
+  H %*% (as.matrix(xi))
+}
+
+### Old error distributions
 ## Edited 2/27/25 to center at 0
 # function to return a logspline dist of residuals with variance corresponding to a desired rho_0 parameter
 # res = residuals from build model
@@ -127,37 +165,7 @@ get_rho_ls = function(mu, ls_obj, ...){
   return(list(mean_res = ex_res$value, rho = rho, v_res = v_res))
 }
 
-# function to get correlation for ridge regression
-# The limit is the OLS fit
-cor_mu = function(X, xi, lambda, v_res, intercept = T){
-  #browser()
-  
-  # add intercept 
-  if(intercept){
-    X = cbind(1, X)
-  }
-  
-  XtX = t(X) %*% X
-  XtX_linv = solve(XtX + diag(lambda, nrow = ncol(X)))
-  H =  X %*% XtX_linv %*% t(X)
-  
-  mu = H %*% (as.matrix(xi))
-  rho_0 = (mean(xi*mu)-mean(xi)*mean(mu))/sqrt((var(xi)+v_res)*var(mu))
-  
-  # correlations
-  c(cor_mu_xi = cor(mu, xi), cor_mu_Y = rho_0, lambda = lambda)
-}
 
-# to get mu values in the population
-get_mu = function(X, xi, lambda, intercept = T){
-  if(intercept){
-    X = cbind(1, X)
-  }
-  XtX = t(X) %*% X
-  XtX_linv = solve(XtX + diag(lambda, nrow = ncol(X)))
-  H =  X %*% XtX_linv %*% t(X)
-  H %*% (as.matrix(xi))
-}
 
 # higher moments of the error distribution
 get_error_third = function(dist){
@@ -168,25 +176,6 @@ get_error_fourth = function(dist){
   integrate(int_ffourth, lower = -Inf, upper = Inf, dist = dist)$value
 }
 
-
-# Get ground truth rho_0 when mu (ridge) =/= xi
-# function to get correlation
-cor_mu = function(X, xi, lambda, v_res){
-  #browser()
-  
-  # add intercept
-  X = cbind(rep(1, nrow(X)), X)
-  
-  XtX = t(X) %*% X
-  XtX_linv = solve(XtX + diag(lambda, nrow = ncol(X)))
-  H =  X %*% XtX_linv %*% t(X)
-  
-  mu = H %*% (as.matrix(xi))
-  rho_0 = (mean(xi*mu)-mean(xi)*mean(mu))/sqrt((var(xi)+v_res)*var(mu))
-  
-  # correlations
-  c(cor_mu_xi = cor(mu, xi), cor_mu_Y = rho_0, lambda = lambda)
-}
 
 # To not generate completely new error for each setting of rho_true for rho_2, just scale the error
 scale_error_rho_2 = function(error_original, v_res_original, v_mu, new_rho_true){
