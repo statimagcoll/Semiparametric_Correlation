@@ -54,7 +54,7 @@ perform_sim = function(pheno, rho_true, seed_ind, ncores, results_path, ...){
   #browser()
   
   # build model
-  # cross-validated ridge regression
+  # cross-validated RF
   keep_inds = which(!(is.na(build[,pheno])))
   
   # try tuning at each of the sample sizes and apply to each
